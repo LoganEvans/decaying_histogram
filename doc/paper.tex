@@ -1,0 +1,174 @@
+\documentclass{sigkddExp}
+\usepackage{xfrac}
+
+\DeclareMathOperator{\age}{age}
+
+\begin{document}
+
+\title{Using Decaying Histograms to Detect Changepoints in Datastreams}
+%\subtitle{[Extended Abstract]
+
+\numberofauthors{1}
+
+\author{
+\alignauthor Logan P. Evans \\
+       \affaddr{Department of Computer Science}\\
+       \affaddr{University of Idaho}\\
+       \email{loganpevans@gmail.com}
+}
+\date{}
+\maketitle
+\begin{abstract}
+    A wide class of applications need to be able to detect changes in timeseries
+    data. This paper presents the decaying histogram which provides, first, a
+    novel way to visualize timeseries data, and second, a computationally cheap
+    way to detect changepoints. The decaying histogram uses exponentially
+    decaying bucket counts and shifting bucket boundaries. By using two decaying
+    histograms that decay at different rates, a Kolmogorov-Smirnov statistic can
+    compare recent timeseries data with older data. Experamental results
+    demonstrate that the average run length until a false signal can be tightly
+    controlled and that the sensitivity to a true signal has a high degree of
+    power.
+\end{abstract}
+
+\section{Introduction}
+    The problem of identifying changes in a source distribution has been an
+    important topic since at least 1922 when George Radford's book "The Control
+    of Quality in Manufacturing" argued for the need to detect changes to the
+    quality of manufactured goods \cite{radford1922control}. More recently, the
+    ability to detect changepoints has been used to detect network intrustions
+    \cite{tartakovsky2006novel}, climate changes \cite{reeves2007review},
+    and image segmentation \cite{ranganathan2010pliss}, and even modifications
+    to social networks \cite{mcculloh2011detecting}.
+
+    The study of changepoint detection is done in two primary branches. The
+    first branch uses parametric techniques which require that the distribution
+    before and after the change is known \cite{polunchenko2012state}. When the
+    exact shapes of the pre- and post-change distributions are known, this can
+    be a robust approach. However, for many applications, the pre- and
+    post-change distributions are not known, so summary statistics based on the
+    central-limit theorm are necessary to use parametric changepoint techniques.
+    This can drastically reduce sensitivity and can preclude the possibility of
+    detecting certain types of change.
+
+    Non-parametric techniques attemt to detect changes to the distribution
+    generating the data \cite{brodsky1993nonparametric}. A wide collection of
+    techniques exist, but these too can be separated into two branches. The
+    first branch uses post-processing to analyze a data set after it has been
+    collected. The second branch uses on-line analysis to signal changes shortly
+    after they occur. A primary concern with on-line analysis is with the
+    expense of computation. However, this is similarly a concern with large
+    datasets.
+
+    The decaying histogram technique uses an on-line non-parametric approach.
+
+\section{The Decaying Histogram}
+    The core idea behind the decaying histogram is that recent data is more
+    useful than old data. A way to emphasize recent data over older data is to
+    use an exponentially decaying count. A histogram is a collection of
+    buckets, each of which represents the count of elements withing its bounds.
+    Rather than use a static count to represent how many elements exist in a
+    bucket, we can use an exponentially decaying count.
+
+    While constructing a traditional histogram, the count for bucket is
+    increased by 1 if the observation is between the bucket's lower bound and
+    upper bound. Letting $B$ represent the set of points in bucket, $H$
+    represent the collection of all buckets in the histogram, $B_l$
+    represent the lower bound of the bucket, and $B_u$ represent
+    the upper bound of the bucket, and $X$ represent a datapoint from the set
+    $S$, we have
+
+    \begin{displaymath}
+        |B| = \sum_{X \in S} [B_l \leq X < B_u]
+    \qquad
+    \mbox{and}
+    \qquad
+        \sum_{B \in H} |B| = |S|.
+    \end{displaymath}
+
+    In contrast, for the decaying histogram with a decay rate of $\alpha$, we
+    need to know how many points have been produced more recently than a given
+    point $X$. Using the $\age(X)$ to represent this quantity, we have
+
+    \begin{displaymath}
+        |B| = \sum_{X \in S} [B_l \leq X < B_u] (1 - \alpha)^{\age(X)} .
+    \end{displaymath}
+
+    Every point will be placed in exactly one bucket, so the total count is the
+    geometric series $\sum_{X \in S} (1 - \alpha)^{\age(X)}$. As the number
+    of data points increases, the total count will follow $\sum_{B \in H} |B|
+    \Rightarrow \frac{1}{\alpha}$.
+
+    In order to use this, we need to know the boundaries $B_l$ and $B_u$ for
+    every bucket $B$. However, using the decaying histogram on-line necessitates
+    that nothing is known about future datapoints. An attempt to predefine
+    bucket boundaries can be badly thwarted. In order to address this, we
+    elected to use an adaptive scheme to approximate bucket boundaries. If each
+    bucket maintains the mean $B_{\mu}$, then the boundary between the
+    buckets $B$ and its upper neighbor $B'$ can be determined by
+
+    \begin{equation}
+    \label{eq:boundaries}
+        B_u =
+            \frac{|B| B_{\mu} + |B'| B'_{\mu}}
+                 {|B| + |B'|}.
+    \end{equation}
+
+    That is, the boundary between two buckets is the arithmetic mean of the
+    counts within those two buckets. In order to track the value $B_{\mu}$, we
+    used the exponentially weighted moving average updating rule
+    \begin{equation}
+    \label{eq:updateMu}
+        B_{\mu} \leftarrow \alpha_{\mu} X + (1 - \alpha_{\mu}) B_{\mu}.
+    \end{equation}
+
+    The updating rule in equation \ref{eq:updateMu} is only applied when a value
+    lands within the bucket. Since this interacts with the boundaries identified
+    in equation \ref{eq:boundaries}, it is possible for an observation to
+    mistakenly count toward an incorrect bucket.
+
+    When the count within a bucket exceeds some threshold, we can split
+    a bucket $B$ into the buckets $B'$ and $B''$. To do this, we need to
+    specify new values for $B'_{\mu}$, $|B'|$, $B''_{\mu}$, and
+    $|B''|$. Since we are splitting the bucket into two new buckets, a
+    natural choice for $|B'|$ and $|B''|$ is $|B'| = |B''| = \sfrac{|B|}{2}$.
+    A workable choice for the new bucket means is to set ${B'_{\mu} = \sfrac{(B_l
+    + B_{\mu})}{2}}$ and ${B''_{\mu} = \sfrac{(B_{\mu} + B_u)}{2}}$.
+    The new boundary between buckets $B'$ and $B''$ will not be
+    guaranteed to be $B_{\mu}$. Furthermore, boundaries between $B'$ and $B''$
+    with their neighbors is likely to be different from the boundaries between
+    $B$ and its neighbors.
+
+    We can also remove a bucket $B$ when the count sinks below some threshold.
+    To do this, we first need to select a neighbor $B'$. A reasonable choice is
+    the neighbor with the smallest count. Then, we can set
+    \begin{displaymath}
+        B'_{\mu} \leftarrow \frac{B_{\mu} |B| + B'_{\mu} |B'|}{|B| + |B'|}.
+    \end{displaymath}
+
+    After this, we can set $|B'| \leftarrow |B| + |B'|$.
+
+\section{Detecting Changepoints}
+    Mention the two histograms here...
+
+\subsection{Quickly computing the Kolmogorov-Smirnov Statistic}
+\subsection{Generating an Empirical Significance Table}
+
+\section{Optimal Values for Tuning Parameters}
+\label{sec:optimalTuningParameters}
+\subsection{Count Decay Rate of the Fast Histogram}
+\subsection{Target Bucket Count}
+\subsection{Average Value of a Bucket}
+
+\section{Experimental Results}
+
+\section{Related Work}
+    [The most comparable paper appears to be \cite{kifer2004detecting}.]
+
+\section{Conclusions}
+
+\bibliographystyle{abbrv}
+\bibliography{yhpargoil}
+
+\end{document}
+
