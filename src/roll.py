@@ -175,9 +175,9 @@ def create_rolling_histogram_class(Bucket=create_bucket_class(),
             '''
 
             if bucket.count < self.delete_bucket_threshold:
-                self.delete_bucket(bucket_idx)
+                self.full_refresh()
             if bucket.count > self.split_bucket_threshold:
-                self.split_bucket(bucket_idx)
+                self.full_refresh()
 
         def get_histogram(self):
             n = [bucket.get_height() for bucket in self.bucket_list]
@@ -296,20 +296,44 @@ def create_rolling_histogram_class(Bucket=create_bucket_class(),
 def get_KS(cdf0, cdf1):
     idx0, idx1 = 0, 0
     KS = 0.0
+    partial0 = 0.0
+    partial1 = 0.0
 
     len0 = len(cdf0)
     len1 = len(cdf1)
     while idx0 < len0 and idx1 < len1:
         KS = max(KS, np.abs(cdf0[idx0][1] - cdf1[idx1][1]))
-        if idx0 + 1 == len0 or idx1 + 1 == len1:
+        if idx0 + 2 == len0 or idx1 + 2 == len1:
+            # Since we don't record the right-hand values for the last bucket,
+            # we can't comput that distance.
             break
         elif cdf0[idx0 + 1][0] == cdf1[idx1 + 1][0]:
+            # The x values are exactly equal.
             idx0 += 1
+            partial0 = 0.0
             idx1 += 1
+            partial1 = 0.0
         elif cdf0[idx0 + 1][0] < cdf1[idx1 + 1][0]:
+            # The x for 0 is smaller than for 1, so move the x value for 0.
             idx0 += 1
+            partial0 = 0.0
+            fraction = ((cdf0[idx0][0] - cdf1[idx1][0]) /
+                        (cdf1[idx1 + 1][0] - cdf1[idx1][0]))
+            partial1 = (cdf1[idx1 + 1][1] - cdf1[idx1][1]) * fraction
         else:
+            # The x value for 1 is smaller than for 0, so move the x value for
+            # 1.
             idx1 += 1
+            partial1 = 0.0
+            try:
+                fraction = ((cdf1[idx1][0] - cdf0[idx0][0]) /
+                            (cdf0[idx0 + 1][0] - cdf0[idx0][0]))
+            except:
+                from pprint import pprint
+                pprint(cdf0)
+                pprint(cdf1)
+                raise
+            partial0 = (cdf0[idx0 + 1][1] - cdf0[idx0][1]) * fraction
     return KS
 
 
