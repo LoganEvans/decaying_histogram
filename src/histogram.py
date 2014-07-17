@@ -100,7 +100,7 @@ def get_histograms():
     rh_slow = roll.create_rolling_histogram_class(
             Bucket=roll.create_bucket_class(
                 alpha_mu=0.01, alpha_count=alpha_count_slow),
-            target_buckets=20)()
+            target_buckets=50)()
     rh_fast = roll.create_rolling_histogram_class(
             Bucket=roll.create_bucket_class(
                 alpha_mu=0.01, alpha_count=alpha_count_fast),
@@ -110,14 +110,14 @@ def get_histograms():
 
 
 def value_generator():
-    dists = [stats.expon(-2, 2), stats.norm(0, 1), stats.norm(0, 4)]
+    dists = [stats.expon(-2, 2), stats.norm(0, 1), stats.cauchy(0)]
     cycles = 500
     samples_per_setting = 1
     while True:
         for _ in range(cycles):
-            yield roll.gen_value(dists[1:2], samples_per_setting)
+            yield roll.gen_value(dists[-1:], samples_per_setting)
         for _ in range(cycles):
-            yield roll.gen_value(dists[2:3], samples_per_setting)
+            yield roll.gen_value(dists[-1:], samples_per_setting)
 
 def foo_generator():
     for val in datasets.dataset1():
@@ -128,8 +128,8 @@ def foo_generator():
 
 fig, ax = plt.subplots()
 animation_function = get_animation_function(
-        #get_histograms(), value_generator())
-        get_histograms(), foo_generator())
+        get_histograms(), value_generator())
+        #get_histograms(), foo_generator())
 #FF_writer = animation.FFMpegWriter()
 ani = animation.FuncAnimation(fig, animation_function, frames=None, repeat=False)
 #ani.save('animated_histogram.mp4', writer=FF_writer, fps=30)

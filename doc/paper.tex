@@ -2,6 +2,8 @@
 \usepackage{xfrac}
 
 \DeclareMathOperator{\age}{age}
+%\DeclareMathOperator{\max}{max}
+\DeclareMathOperator{\cdf}{cdf}
 
 \begin{document}
 
@@ -148,11 +150,38 @@
 
     After this, we can set $|B'| \leftarrow |B| + |B'|$.
 
-\section{Detecting Changepoints}
-    Mention the two histograms here...
+    To initialize the decaying histogram, it is sufficient to take the initial
+    observation $X_1$ and use it to specify a single bucket
+    bucket $B$ with a count $|B| \leftarrow 1$ and mean value $B_{\mu}
+    \leftarrow X_1$.
 
-\subsection{Quickly computing the Kolmogorov-Smirnov Statistic}
-\subsection{Generating an Empirical Significance Table}
+\section{Detecting Changepoints}
+    In order to detect changepoints in a timeseries, we can use two decaying
+    histograms with different decaying count values. Then we can use a
+    Kolmogorov-Smirnov statistic to measure the distance between the two
+    histograms. When the Kolmogorov-Smirnov statistic exceeds a threshold, we
+    can emit a signal that we have detected a change.
+
+    The Kolmogorov-Smirnov statistic is the maximum distance between the
+    cumulative distribution functions for two distributions. That is,
+
+    \begin{displaymath}
+        KS = \max_{X = x}(|\cdf_{H_s}(X) - \cdf_{H_f}(X)|)
+    \end{displaymath}
+
+    where $H_s$ represents the histogram with a slow count decay rate and
+    $H_f$ represents the histogram with the fast count decay rate.
+
+    Since every data observation is recorded in both histograms, there is a
+    correlation between the two histograms that does not exist in published
+    significance tables for the Kolmogorov-Smirnov statistic. However, we can
+    use Monte-Carlo simulation methods to generate the distribution of the $KS$
+    statistic for two decaying histograms where all data values are taken to be
+    independent and identically distributed \cite{robert2005monte}. The process
+    for this technique is to simulate data values drawn from an arbitrary
+    continuous distribution and record these values in both of the decaying
+    histograms. In order to generate a large number of values, we can assume
+    that the sequence of $KS$ statistics is ergodic.
 
 \section{Optimal Values for Tuning Parameters}
 \label{sec:optimalTuningParameters}
