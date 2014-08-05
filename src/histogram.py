@@ -104,20 +104,22 @@ def get_histograms():
     rh_fast = roll.create_rolling_histogram_class(
             Bucket=roll.create_bucket_class(
                 alpha_mu=0.01, alpha_count=alpha_count_fast),
-            target_buckets=20)()
+            target_buckets=40)()
     hists = [rh_slow, rh_fast]
     return hists
 
 
 def value_generator():
-    dists = [stats.expon(-2, 2), stats.norm(0, 1), stats.cauchy(0)]
-    cycles = 500
+    dists = [stats.expon(-2, 2), stats.norm(0, 1), stats.norm(-1, 3)]
+    cycles = 100
     samples_per_setting = 1
     while True:
         for _ in range(cycles):
-            yield roll.gen_value(dists[-1:], samples_per_setting)
+            yield roll.gen_value(dists[0:1], samples_per_setting)
         for _ in range(cycles):
-            yield roll.gen_value(dists[-1:], samples_per_setting)
+            yield roll.gen_value(dists[1:2], samples_per_setting)
+        for _ in range(cycles):
+            yield roll.gen_value(dists[2:3], samples_per_setting)
 
 def foo_generator():
     for val in datasets.dataset1():
