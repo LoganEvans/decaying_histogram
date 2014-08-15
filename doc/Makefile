@@ -4,9 +4,6 @@ all:
 	pdflatex paper.tex
 	pdflatex paper.tex
 
-sigkddExp:
-	pdflatex sigkddExp.tex
-
 clean:
-	$(RM) *.aux *.log *.pdf
+	$(RM) *.aux *.log *.pdf *.blg *.bbl
 

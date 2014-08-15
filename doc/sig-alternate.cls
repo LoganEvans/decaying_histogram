@@ -1,44 +1,74 @@
-% sigkddExp.cls 
-% Sunita Sarawagi, Jan 2000.
-% -- modified for sigkdd explorations newsletter from.
-% ACMPROC-SP.CLS - SPECIAL VERSION V1.0SP
-% TO PRODUCE NO PAGE NUMBERS AND NO COPYRIGHT STATEMENT
-% AND NO PERMISSION BLOCK.
-% (YET PROPERLY PLACE THE CONFERENCE-INFO IF SUPPLIED)
-% Gerald Murray 11.30.1999
+% SIG-ALTERNATE.CLS - VERSION 2.5
+% "COMPATIBLE" WITH THE "ACM_PROC_ARTICLE-SP.CLS" V3.2SP
+% Gerald Murray - May 23rd 2012
 %
 % ---- Start of 'updates'  ----
+% Changed $10 fee to $15 -- May 2012  --  Gerry
+% Changed $5 fee to $10 --  April 2009 -- Gerry
+% April 22nd. 2009 - Fixed 'Natbib' incompatibility problem - Gerry
+% April 22nd. 2009 - Fixed 'Babel' incompatibility problem - Gerry
+% April 22nd. 2009 - Inserted various bug-fixes and improvements - Gerry
+%
+% To produce Type 1 fonts in the document plus allow for 'normal LaTeX accenting' in the critical areas;
+% title, author block, section-heads, confname, etc. etc. 
+% i.e. the whole purpose of this version update is to NOT resort to 'inelegant accent patches'.
+% After much research, three extra .sty packages were added to the the tail (ae, aecompl, aeguill) to solve,
+% in particular, the accenting problem(s). We _could_ ask authors (via instructions/sample file) to 'include' these in
+% the source .tex file - in the preamble - but if everything is already provided ('behind the scenes' - embedded IN the .cls)
+% then this is less work for authors and also makes everything appear 'vanilla'.
+% NOTE: all 'patchwork accenting" has been commented out (here) and is no longer 'used' in the sample .tex file (either).
+% Gerry June 2007
+%
+% Patch for accenting in conference name/location. Gerry May 3rd. 2007
+% Rule widths changed to .5, author count (>6) fixed, roll-back for Type 3 problem. Gerry March 20th. 2007
+% Changes made to 'modernize' the fontnames but esp. for MikTeX users V2.4/2.5 - Nov. 30th. 2006
+% Updated the \email definition to allow for its use inside of 'shared affiliations' - Nov. 30th. 2006
+% Fixed the 'section number depth value' - Nov. 30th. 2006
+%
+% Footnotes inside table cells using \minipage (Oct. 2002)
+% Georgia fixed bug in sub-sub-section numbering in paragraphs (July 29th. 2002)
+% JS/GM fix to vertical spacing before Proofs (July 30th. 2002)
+%
+% Made the Permission Statement / Conference Info / Copyright Info
+% 'user definable' in the source .tex file OR automatic if
+% not specified.
 %
 % Allowance made to switch default fonts between those systems using
-% METAFONT and those using 'Type 1' or 'Truetype' fonts.
-% See LINE NUMBER 232 for details.
+% normal/modern font names and those using 'Type 1' or 'Truetype' fonts.
+% See LINE NUMBER 255 for details.
 % Also provided for enumerated/annotated Corollaries 'surrounded' by
-% enumerated Theorems (line 790).
+% enumerated Theorems (line 848).
 % Gerry November 11th. 1999
 %
 % ---- End of 'updates' ----
 %
-\def\fileversion{v1.0SP}          % for ACM's tracking purposes
-\def\filedate{November 30, 1999}    % Gerry Murray's tracking data
-\def\docdate {Tuesday 30th. November 1999} % Gerry Murray (with deltas to doc}
+\def\fileversion{v2.5}          % for ACM's tracking purposes
+\def\filedate{May 23, 2012}    % Gerry Murray's tracking data
+\def\docdate {Wednesday 23rd. May 2012} % Gerry Murray (with deltas to doc}
 \usepackage{epsfig}
 \usepackage{amssymb}
 \usepackage{amsmath}
 \usepackage{amsfonts}
-\usepackage{color}
+% Need this for accents in Arial/Helvetica
+%\usepackage[T1]{fontenc}  % Gerry March 12, 2007 - causes Type 3 problems (body text)
+%\usepackage{textcomp}
 %
-% ACMPROC-SP DOCUMENT STYLE
+% SIG-ALTERNATE DOCUMENT STYLE
 % G.K.M. Tobin August-October 1999
 %    adapted from ARTICLE document style by Ken Traub, Olin Shivers
 %    also using elements of esub2acm.cls
+% HEAVILY MODIFIED, SUBSEQUENTLY, BY GERRY MURRAY 2000
 % ARTICLE DOCUMENT STYLE -- Released 16 March 1988
 %    for LaTeX version 2.09
 % Copyright (C) 1988 by Leslie Lamport
 %
 %
-%%% ACMPROC-SP is a document style for producing two-column camera-ready pages for
-%%% ACM conferences, according to ACM specifications.  The main features of
-%%% this style are:
+%%% sig-alternate.cls is an 'ALTERNATE' document style for producing
+%%% two-column camera-ready pages for ACM conferences.
+%%% THIS FILE DOES NOT STRICTLY ADHERE TO THE SIGS (BOARD-ENDORSED)
+%%% PROCEEDINGS STYLE. It has been designed to produce a 'tighter'
+%%% paper in response to concerns over page budgets.
+%%% The main features of this style are:
 %%%
 %%% 1)  Two columns.
 %%% 2)  Side and top margins of 4.5pc, bottom margin of 6pc, column gutter of
@@ -62,7 +92,7 @@
 %%%
 %
 %%% Copyright Space:
-%%% This style automatically leaves 1" blank space at the bottom of page 1/
+%%% This style automatically reserves 1" blank space at the bottom of page 1/
 %%% column 1.  This space can optionally be filled with some text using the
 %%% \toappear{...} command.  If used, this command must be BEFORE the \maketitle
 %%% command.  If this command is defined AND [preprint] is on, then the
@@ -83,12 +113,12 @@
 %%% You may turn this hackery off via the -e option:
 %%%     dvips -e 0 foo.dvi >foo.ps
 %%%
-\typeout{Document Class 'acmproc-sp' <30th. Nov. '99>.  Modified by G.K.M. Tobin}
+\typeout{Document Class 'sig-alternate' <23rd. May '12>.  Modified by G.K.M. Tobin/Gerry Murray}
 \typeout{Based in part upon document Style `acmconf' <22 May 89>. Hacked 4/91 by}
 \typeout{shivers@cs.cmu.edu, 4/93 by theobald@cs.mcgill.ca}
 \typeout{Excerpts were taken from (Journal Style) 'esub2acm.cls'.}
-\typeout{****** Bugs/comments/suggestions  to Gerry Murray -- murray@hq.acm.org ******}
-
+\typeout{****** Bugs/comments/suggestions/technicalities to Gerry Murray -- murray@hq.acm.org ******}
+\typeout{Questions on the style, SIGS policies, etc. to Adrienne Griscti griscti@acm.org}
 \oddsidemargin 4.5pc
 \evensidemargin 4.5pc
 \advance\oddsidemargin by -1in  % Correct for LaTeX gratuitousness
@@ -160,7 +190,7 @@
                          % notes.
 
 \parskip 0pt plus 1pt            % Extra vertical space between paragraphs.
-\parindent 0pt                % Width of paragraph indentation.
+\parindent 9pt  % GM July 2000 / was 0pt - width of paragraph indentation.
 \partopsep 2pt plus 1pt minus 1pt% Extra vertical space, in addition to
                                  % \parskip and \topsep, added when user
                                  % leaves blank line before environment.
@@ -173,11 +203,14 @@
 \@endparpenalty   -\@lowpenalty % After a list or paragraph environment.
 \@itempenalty     -\@lowpenalty % Between list items.
 
-\@namedef{ds@10pt}{\@latexerr{The `10pt' option is not allowed in the `acmconf'
+%\@namedef{ds@10pt}{\@latexerr{The `10pt' option is not allowed in the `acmconf'
+\@namedef{ds@10pt}{\ClassError{The `10pt' option is not allowed in the `acmconf'	% January 2008
   document style.}\@eha}
-\@namedef{ds@11pt}{\@latexerr{The `11pt' option is not allowed in the `acmconf'
+%\@namedef{ds@11pt}{\@latexerr{The `11pt' option is not allowed in the `acmconf'
+\@namedef{ds@11pt}{\ClassError{The `11pt' option is not allowed in the `acmconf'	% January 2008
   document style.}\@eha}
-\@namedef{ds@12pt}{\@latexerr{The `12pt' option is not allowed in the `acmconf'
+%\@namedef{ds@12pt}{\@latexerr{The `12pt' option is not allowed in the `acmconf'
+\@namedef{ds@12pt}{\ClassError{The `12pt' option is not allowed in the `acmconf'	% January 2008
   document style.}\@eha}
 
 \@options
@@ -230,7 +263,7 @@
 \gdef\additionalauthors#1{\addauthors={#1}}
 
 \gdef\numberofauthors#1{\global\aucount=#1
-\ifnum\aucount>3\global\originalaucount=\aucount \global\aucount=3\fi %g}
+\ifnum\aucount>3\global\originalaucount=\aucount \global\aucount=3\fi %g}  % 3 OK - Gerry March 2007
 \global\auskipcount=\aucount\global\advance\auskipcount by 1
 \global\multiply\auskipcount by 2
 \global\multiply\auskip by \auskipcount
@@ -251,43 +284,59 @@
 %
 %  -- Start of block A -- (Type 1 or Truetype fonts)
 %\newfont{\secfnt}{timesbd at 12pt} % was timenrb originally - now is timesbd
+%\newfont{\secit}{timesbi at 12pt}   %13 Jan 00 gkmt
 %\newfont{\subsecfnt}{timesi at 11pt} % was timenrri originally - now is timesi
+%\newfont{\subsecit}{timesbi at 11pt} % 13 Jan 00 gkmt -- was times changed to timesbi gm 2/4/2000
+%                         % because "normal" is italic, "italic" is Roman
 %\newfont{\ttlfnt}{arialbd at 18pt} % was arialb originally - now is arialbd
+%\newfont{\ttlit}{arialbi at 18pt}    % 13 Jan 00 gkmt
 %\newfont{\subttlfnt}{arial at 14pt} % was arialr originally - now is arial
+%\newfont{\subttlit}{ariali at 14pt} % 13 Jan 00 gkmt
+%\newfont{\subttlbf}{arialbd at 14pt}  % 13 Jan 00 gkmt
 %\newfont{\aufnt}{arial at 12pt} % was arialr originally - now is arial
+%\newfont{\auit}{ariali at 12pt} % 13 Jan 00 gkmt
 %\newfont{\affaddr}{arial at 10pt} % was arialr originally - now is arial
+%\newfont{\affaddrit}{ariali at 10pt} %13 Jan 00 gkmt
 %\newfont{\eaddfnt}{arial at 12pt} % was arialr originally - now is arial
 %\newfont{\ixpt}{times at 9pt} % was timenrr originally - now is times
 %\newfont{\confname}{timesi at 8pt} % was timenrri - now is timesi
 %\newfont{\crnotice}{times at 8pt} % was timenrr originally - now is times
 %\newfont{\ninept}{times at 9pt} % was timenrr originally - now is times
+
 % *********************************************
 %  -- End of block A --
 %
 %
-% -- Start of block B -- METAFONT
-% +++++++++++++++++++++++++++++++++++++++++++++
-% Next (default) block for those using Metafont
-% Gerry Murray 11/11/1999
-% *** THIS BLOCK FOR THOSE USING METAFONT *****
-\newfont{\secfnt}{ptmb at 12pt}
-\newfont{\subsecfnt}{ptmri at 11pt}
-\newfont{\ttlfnt}{phvb at 18pt}
-\newfont{\subttlfnt}{phvr at 14pt}
-\newfont{\aufnt}{phvr at 12pt}
-\newfont{\affaddr}{phvr at 10pt}
-\newfont{\eaddfnt}{phvr at 12pt}
-\newfont{\ixpt}{ptmr at 9pt}
-\newfont{\confname}{ptmri at 8pt}
-\newfont{\crnotice}{ptmr at 8pt}
-\newfont{\ninept}{ptmr at 9pt}
+% -- Start of block B -- UPDATED FONT NAMES
 % *********************************************
+% Gerry Murray 11/30/2006
+% *********************************************
+\newfont{\secfnt}{ptmb8t at 12pt}
+\newfont{\secit}{ptmbi8t at 12pt}    %13 Jan 00 gkmt
+\newfont{\subsecfnt}{ptmri8t at 11pt}
+\newfont{\subsecit}{ptmbi8t at 11pt}  % 
+\newfont{\ttlfnt}{phvb8t at 18pt}
+\newfont{\ttlit}{phvbo8t at 18pt}    % GM 2/4/2000
+\newfont{\subttlfnt}{phvr8t at 14pt}
+\newfont{\subttlit}{phvro8t at 14pt} % GM 2/4/2000
+\newfont{\subttlbf}{phvb8t at 14pt}  % 13 Jan 00 gkmt
+\newfont{\aufnt}{phvr8t at 12pt}
+\newfont{\auit}{phvro8t at 12pt}     % GM 2/4/2000
+\newfont{\affaddr}{phvr8t at 10pt}
+\newfont{\affaddrit}{phvro8t at 10pt} % GM 2/4/2000
+\newfont{\eaddfnt}{phvr8t at 12pt}
+\newfont{\ixpt}{ptmr8t at 9pt}
+\newfont{\confname}{ptmri8t at 8pt}
+\newfont{\crnotice}{ptmr8t at 8pt}
+\newfont{\ninept}{ptmr8t at 9pt}
 % +++++++++++++++++++++++++++++++++++++++++++++
 % -- End of block B --
 
-\def\email#1{{{\eaddfnt{\vskip 4pt#1}}}}
+%\def\email#1{{{\eaddfnt{\vskip 4pt#1}}}}
+% If we have an email, inside a "shared affiliation" then we need the following instead
+\def\email#1{{{\eaddfnt{\par #1}}}}       % revised  - GM - 11/30/2006
 
-\def\addauthorsection{\ifnum\originalaucount>3
+\def\addauthorsection{\ifnum\originalaucount>6  % was 3 - Gerry March 2007
     \section{Additional Authors}\the\addauthors
   \fi}
 
@@ -385,7 +434,7 @@
 
 \arraycolsep 4.5pt   % Half the space between columns in an array environment.
 \tabcolsep 5.4pt    % Half the space between columns in a tabular environment.
-\arrayrulewidth .4pt % Width of rules in array and tabular environment.
+\arrayrulewidth .5pt % Width of rules in array and tabular environment. % (was .4) updated Gerry March 20 2007
 \doublerulesep 1.8pt % Space between adjacent rules in array or tabular env.
 
 \tabbingsep \labelsep   % Space used by the \' command.  (See LaTeX manual.)
@@ -393,13 +442,13 @@
 \skip\@mpfootins =\skip\footins
 
 \fboxsep =2.7pt      % Space left between box and text by \fbox and \framebox.
-\fboxrule =.4pt      % Width of rules in box made by \fbox and \framebox.
+\fboxrule =.5pt      % Width of rules in box made by \fbox and \framebox. % (was .4) updated Gerry March 20 2007
 
 \def\thepart{\Roman{part}} % Roman numeral part numbers.
 \def\thesection       {\arabic{section}}
 \def\thesubsection    {\thesection.\arabic{subsection}}
-\def\thesubsubsection {\thesubsection.\arabic{subsubsection}}
-\def\theparagraph     {\thesubsubsection.\arabic{paragraph}}
+%\def\thesubsubsection {\thesubsection.\arabic{subsubsection}} % GM 7/30/2002
+%\def\theparagraph     {\thesubsubsection.\arabic{paragraph}}  % GM 7/30/2002
 \def\thesubparagraph  {\theparagraph.\arabic{subparagraph}}
 
 \def\@pnumwidth{1.55em}
@@ -407,8 +456,12 @@
 \def\@dotsep{4.5}
 \setcounter{tocdepth}{3}
 
-\def\tableofcontents{\@latexerr{\tableofcontents: Tables of contents are not
-  allowed in the `acmconf' document style.}\@eha}
+%\def\tableofcontents{\@latexerr{\tableofcontents: Tables of contents are not
+%  allowed in the `acmconf' document style.}\@eha}
+
+\def\tableofcontents{\ClassError{%
+    \string\tableofcontents\space is not allowed in the `acmconf' document	% January 2008
+    style}\@eha}
 
 \def\l@part#1#2{\addpenalty{\@secpenalty}
    \addvspace{2.25em plus 1pt}  % space above part line
@@ -426,7 +479,7 @@
    \addvspace{1.0em plus 1pt}   % space above toc entry
    \@tempdima 1.5em             % width of box holding section number
    \begingroup
-     \parindent \z@ \rightskip \@pnumwidth
+    \parindent  \z@ \rightskip \@pnumwidth
      \parfillskip -\@pnumwidth
      \bf                        % Boldface.
      \leavevmode                % TeX command to enter horizontal mode.
@@ -441,20 +494,32 @@
 \def\l@paragraph{\@dottedtocline{4}{7.0em}{4.1em}}
 \def\l@subparagraph{\@dottedtocline{5}{10em}{5em}}
 
-\def\listoffigures{\@latexerr{\listoffigures: Lists of figures are not
-  allowed in the `acmconf' document style.}\@eha}
+%\def\listoffigures{\@latexerr{\listoffigures: Lists of figures are not
+%  allowed in the `acmconf' document style.}\@eha}
+
+\def\listoffigures{\ClassError{%
+    \string\listoffigures\space is not allowed in the `acmconf' document	% January 2008
+    style}\@eha}
 
 \def\l@figure{\@dottedtocline{1}{1.5em}{2.3em}}
 
-\def\listoftables{\@latexerr{\listoftables: Lists of tables are not
-  allowed in the `acmconf' document style.}\@eha}
-\let\l@table\l@figure
+%\def\listoftables{\@latexerr{\listoftables: Lists of tables are not
+%  allowed in the `acmconf' document style.}\@eha}
+%\let\l@table\l@figure
+
+\def\listoftables{\ClassError{%
+    \string\listoftables\space is not allowed in the `acmconf' document		% January 2008
+    style}\@eha}
+ \let\l@table\l@figure
 
 \def\footnoterule{\kern-3\p@
-  \hrule width .4\columnwidth
-  \kern 2.6\p@}                 % The \hrule has default height of .4pt .
-\long\def\@makefntext#1{\noindent
-\hbox to .5em{\hss$^{\@thefnmark}$}#1}
+  \hrule width .5\columnwidth   % (was .4) updated Gerry March 20 2007
+  \kern 2.6\p@}                 % The \hrule has default height of .4pt % (was .4) updated Gerry March 20 2007
+% ------
+\long\def\@makefntext#1{\noindent 
+%\hbox to .5em{\hss$^{\@thefnmark}$}#1}   % original
+\hbox to .5em{\hss\textsuperscript{\@thefnmark}}#1}  % C. Clifton / GM Oct. 2nd. 2002
+% -------
 
 \long\def\@maketntext#1{\noindent
 #1}
@@ -473,11 +538,23 @@
 \def\dbltopfraction{.7}
 \def\dblfloatpagefraction{.5}
 
+%
+\long\def\@makecaption#1#2{
+   \vskip \baselineskip
+   \setbox\@tempboxa\hbox{\textbf{#1: #2}}
+   \ifdim \wd\@tempboxa >\hsize % IF longer than one line:
+       \textbf{#1: #2}\par               %   THEN set as ordinary paragraph.
+     \else                      %   ELSE  center.
+       \hbox to\hsize{\hfil\box\@tempboxa\hfil}\par
+   \fi}
+
+%
+
 \long\def\@makecaption#1#2{
    \vskip 10pt
-   \setbox\@tempboxa\hbox{#1: #2}
+   \setbox\@tempboxa\hbox{\textbf{#1: #2}}
    \ifdim \wd\@tempboxa >\hsize % IF longer than one line:
-       #1: #2\par               %   THEN set as ordinary paragraph.
+       \textbf{#1: #2}\par                %   THEN set as ordinary paragraph.
      \else                      %   ELSE  center.
        \hbox to\hsize{\hfil\box\@tempboxa\hfil}
    \fi}
@@ -489,7 +566,8 @@
 \def\ext@figure{lof}
 \def\fnum@figure{Figure \thefigure}
 \def\figure{\@float{figure}}
-\let\endfigure\end@float
+%\let\endfigure\end@float
+\def\endfigure{\end@float} 		% Gerry January 2008
 \@namedef{figure*}{\@dblfloat{figure}}
 \@namedef{endfigure*}{\end@dblfloat}
 
@@ -500,7 +578,8 @@
 \def\ext@table{lot}
 \def\fnum@table{Table \thetable}
 \def\table{\@float{table}}
-\let\endtable\end@float
+%\let\endtable\end@float
+\def\endtable{\end@float}		% Gerry January 2008
 \@namedef{table*}{\@dblfloat{table}}
 \@namedef{endtable*}{\end@dblfloat}
 
@@ -531,7 +610,7 @@
 
 \if@ll
   \NeedsTeXFormat{LaTeX2e}
-  \ProvidesClass{acmproc-sp} [1999/11/01 - V1.0SP - based on esub2acm.sty <23 April 96>]
+  \ProvidesClass{sig-alternate} [2012/05/23 - V2.5 - based on acmproc.cls V1.3 <Nov. 30 '99>]
   \RequirePackage{latexsym}% QUERY: are these two really needed?
   \let\dooptions\ProcessOptions
 \else
@@ -763,8 +842,7 @@
 \@float{copyrightbox}[b]
 \begin{center}
 \setlength{\unitlength}{1pc}
-% not required for SIGKDD Explorations --- Sunita Sarawagi, Jan 2000.
-\begin{picture}(0,0) %Space for copyright notice
+\begin{picture}(20,6) %Space for copyright notice
 \put(0,-0.95){\crnotice{\@toappear}}
 \end{picture}
 \end{center}
@@ -779,8 +857,12 @@
 \def\conferenceinfo#1#2{\global\conf={#1}\global\confinfo{#2}}
 
 
-\def\marginpar{\@latexerr{The \marginpar command is not allowed in the
-  `acmconf' document style.}\@eha}
+%\def\marginpar{\@latexerr{The \marginpar command is not allowed in the
+%  `acmconf' document style.}\@eha}
+
+\def\marginpar{\ClassError{%
+    \string\marginpar\space is not allowed in the `acmconf' document		% January 2008
+    style}\@eha}
 
 \mark{{}{}}     % Initializes TeX's marks
 
@@ -790,6 +872,7 @@
   \space\number\day, \number\year}
 
 \def\@begintheorem#1#2{%
+    \parskip 0pt % GM July 2000 (for tighter spacing)
     \trivlist
     \item[%
         \hskip 10\p@
@@ -799,6 +882,7 @@
     \it
 }
 \def\@opargbegintheorem#1#2#3{%
+    \parskip 0pt % GM July 2000 (for tighter spacing)
     \trivlist
     \item[%
         \hskip 10\p@
@@ -814,9 +898,20 @@
 }
 \newif\if@qeded
 \global\@qededfalse
+
+% -- original
+%\def\proof{%
+%  \vspace{-\parskip} % GM July 2000 (for tighter spacing)
+%    \global\@qededfalse
+%    \@ifnextchar[{\@xproof}{\@proof}%
+%}
+% -- end of original
+
+% (JSS) Fix for vertical spacing bug - Gerry Murray July 30th. 2002
 \def\proof{%
-    \global\@qededfalse
-    \@ifnextchar[{\@xproof}{\@proof}%
+\vspace{-\lastskip}\vspace{-\parsep}\penalty-51%
+\global\@qededfalse
+\@ifnextchar[{\@xproof}{\@proof}%
 }
 
 \def\endproof{%
@@ -870,7 +965,8 @@
         \hskip 10\p@
         \hskip \labelsep
         {\it #2%
-         \savebox\@tempboxa{#3}%
+%         \savebox\@tempboxa{#3}%
+         \saveb@x\@tempboxa{#3}%		% January 2008
          \ifdim \wd\@tempboxa>\z@
             \ \box\@tempboxa
          \fi.%
@@ -895,8 +991,8 @@
 \def\thepart{\Roman{part}}
 \def\thesection{\arabic{section}}
 \def\thesubsection{\thesection.\arabic{subsection}}
-\def\thesubsubsection{{\subsecfnt\thesubsection.\arabic{subsubsection}}}
-\def\theparagraph{{\subsecfnt\thesubsubsection.\arabic{paragraph}}}
+\def\thesubsubsection{\thesubsection.\arabic{subsubsection}} %removed \subsecfnt 29 July 2002 gkmt
+\def\theparagraph{\thesubsubsection.\arabic{paragraph}} %removed \subsecfnt 29 July 2002 gkmt
 \newif\if@uchead
 \@ucheadfalse
 
@@ -910,12 +1006,7 @@
         {4\p@}{\normalsize\@ucheadtrue}%
 }
 \def\section{%
-    \@startsection{section}{1}{\z@}{-10\p@ \@plus -4\p@ \@minus -2\p@}%
-    {4\p@}{\baselineskip 14pt\secfnt\@ucheadtrue}%
-}
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-\def\section{%
-    \@startsection{section}{1}{\z@}{-10\p@ \@plus -4\p@ \@minus -2\p@}%
+    \@startsection{section}{1}{\z@}{-10\p@ \@plus -4\p@ \@minus -2\p@}% GM
     {4\p@}{\baselineskip 14pt\secfnt\@ucheadtrue}%
 }
 
@@ -927,8 +1018,17 @@
     \@startsection{subsubsection}{3}{\z@}{-8\p@ \@plus -2\p@ \@minus -\p@}%
     {4\p@}{\subsecfnt}%
 }
+%\def\paragraph{%
+%    \vskip 12pt\@startsection{paragraph}{3}{\z@}{6\p@ \@plus \p@}% original
+%    {-5\p@}{\subsecfnt}%
+%}
+%  If one wants sections, subsections and subsubsections numbered,
+%  but not paragraphs, one usually sets secnumepth to 3.
+%  For that, the "depth" of paragraphs must be given correctly
+%  in the definition (``4'' instead of ``3'' as second argument
+%  of @startsection):
 \def\paragraph{%
-    \vskip 12pt\@startsection{paragraph}{3}{\z@}{6\p@ \@plus \p@}%
+    \vskip 12pt\@startsection{paragraph}{4}{\z@}{6\p@ \@plus \p@}%    % GM and Wolfgang May - 11/30/06
     {-5\p@}{\subsecfnt}%
 }
 \let\@period=.
@@ -938,7 +1038,7 @@
         \leavevmode
         \global\let\@period.%
     \fi
-    \par
+      \par %
     \@tempskipa #4\relax
     \@afterindenttrue
     \ifdim \@tempskipa <\z@
@@ -946,11 +1046,12 @@
         \@afterindentfalse
     \fi
     \if@nobreak
-        \everypar{}%
+    \everypar{}%
     \else
         \addpenalty\@secpenalty
         \addvspace\@tempskipa
     \fi
+\parskip=0pt % GM July 2000 (non numbered) section heads
     \@ifstar
         {\@ssect{#3}{#4}{#5}{#6}}
         {\@dblarg{\@sect{#1}{#2}{#3}{#4}{#5}{#6}}}%
@@ -962,7 +1063,8 @@
         \refstepcounter{#1}%
         \edef\@svsec{%
             \begingroup
-                \ifnum#2>2 \noexpand\rm \fi
+                %\ifnum#2>2 \noexpand\rm \fi % changed to next 29 July 2002 gkmt
+            \ifnum#2>2 \noexpand#6 \fi
                 \csname the#1\endcsname
             \endgroup
             \ifnum #2=1\relax .\fi
@@ -985,7 +1087,7 @@
             \endgroup
         \endgroup
         \csname #1mark\endcsname{#7}%
-        \vskip -14pt  %gkmt, 11 aug 99
+        \vskip -12pt  %gkmt, 11 aug 99 and GM July 2000 (was -14) - numbered section head spacing
 \addcontentsline{toc}{#1}{%
             \ifnum #2>\c@secnumdepth \else
                 \protect\numberline{\csname the#1\endcsname}%
@@ -1011,7 +1113,8 @@
             }%
         }%
     \fi
-    \@xsect{#5}\hskip 1pt\par
+    \@xsect{#5}\hskip 1pt
+    \par
 }
 \def\@xsect#1{%
     \@tempskipa #1\relax
@@ -1075,8 +1178,7 @@
 %%% Actually, 'abbrev' works just fine as the default
 %%% Bibliography style.
 
-\parindent 0pt
-\typeout{Using ACM bibliography style}
+\typeout{Using 'Abbrev' bibliography style}
 \newcommand\bibyear[2]{%
     \unskip\quad\ignorespaces#1\unskip
     \if#2..\quad \else \quad#2 \fi
@@ -1105,17 +1207,23 @@
     \fi
     \@ifstar{\@citeNB\@@cite}{\@normalcite\@@cite}%
 }
-\def\cite{\start@cite23}
-\def\citeNP{\cite*}
-\def\citeA{\start@cite10}
+%\def\cite{\start@cite23}
+\DeclareRobustCommand\cite{\start@cite23}		% January 2008
+\def\citeNP{\cite*}					% No Parentheses e.g. 5
+%\def\citeA{\start@cite10}
+\DeclareRobustCommand\citeA{\start@cite10}		% January 2008
 \def\citeANP{\citeA*}
-\def\shortcite{\start@cite23}
+%\def\shortcite{\start@cite23}				
+\DeclareRobustCommand\shortcite{\start@cite23}		% January 2008
 \def\shortciteNP{\shortcite*}
-\def\shortciteA{\start@cite20}
+%\def\shortciteA{\start@cite20}
+\DeclareRobustCommand\shortciteA{\start@cite20}		% January 2008
 \def\shortciteANP{\shortciteA*}
-\def\citeyear{\start@cite30}
+%\def\citeyear{\start@cite30}
+\DeclareRobustCommand\citeyear{\start@cite30}		% January 2008
 \def\citeyearNP{\citeyear*}
-\def\citeN{%
+%\def\citeN{%
+\DeclareRobustCommand\citeN{%				% January 2008
     \@citeRB
     \def\citeauthoryear##1##2##3{##1\ [##3%
         \def\reserved@a{##1}%
@@ -1132,7 +1240,8 @@
     }%
     \@ifstar\@citeyear\@citeyear
 }
-\def\shortciteN{%
+%\def\shortciteN{%
+\DeclareRobustCommand\shortciteN{%			% January 2008
     \@citeRB
     \def\citeauthoryear##1##2##3{##2\ [##3%
         \def\reserved@a{##2}%
@@ -1147,22 +1256,28 @@
             \fi
         }%
     }%
-    \@ifstart\@citeyear\@citeyear
+    \@ifstar\@citeyear\@citeyear  % GM July 2000
 }
+
 \def\@citenormal{%
-    \@ifnextchar [{\@tempswatrue\@citex;}
-                  {\@tempswafalse\@citex;[]}%
+    \@ifnextchar [{\@tempswatrue\@citex;}%
+% original                 {\@tempswafalse\@citex,[]}% was ; Gerry 2/24/00
+{\@tempswafalse\@citex[]}%  	% GERRY FIX FOR BABEL 3/20/2009
 }
+
 \def\@citeyear{%
     \@ifnextchar [{\@tempswatrue\@citex,}%
-                  {\@tempswafalse\@citex,[]}%
+% original                  {\@tempswafalse\@citex,[]}%
+{\@tempswafalse\@citex[]}%	%  GERRY FIX FOR BABEL 3/20/2009
 }
+
 \def\@citex#1[#2]#3{%
     \let\@citea\@empty
     \@cite{%
         \@for\@citeb:=#3\do{%
             \@citea
-            \def\@citea{#1 }%
+% original            \def\@citea{#1 }%
+            \def\@citea{#1, }% 	% GERRY FIX FOR BABEL 3/20/2009 -- SO THAT YOU GET [1, 2] IN THE BODY TEXT
             \edef\@citeb{\expandafter\@iden\@citeb}%
             \if@filesw
                 \immediate\write\@auxout{\string\citation{\@citeb}}%
@@ -1177,28 +1292,36 @@
         }%
     }{#2}%
 }
-\let\@biblabel\@gobble
+%\let\@biblabel\@gobble   % Dec. 2008 - Gerry
+% ----
+\def\@biblabelnum#1{[#1]} % Gerry's solution #1 - for Natbib -- April 2009
+\let\@biblabel=\@biblabelnum  % Gerry's solution #1 - for Natbib -- April 2009
+\def\newblock{\relax} % Gerry Dec. 2008
+% ---
 \newdimen\bibindent
 \setcounter{enumi}{1}
 \bibindent=0em
-\def\thebibliography#1{%
+\def\thebibliography#1{% 
 \ifnum\addauflag=0\addauthorsection\global\addauflag=1\fi
-    \section{%
-       {REFERENCES}
-        \@mkboth{{\refname}}{{\refname}}%
-    }%
-    \list{[\arabic{enumi}]}{%
-        \settowidth\labelwidth{[#1]}%
-        \leftmargin\labelwidth
-        \advance\leftmargin\labelsep
-        \advance\leftmargin\bibindent
-        \itemindent -\bibindent
-        \listparindent \itemindent
-        \usecounter{enumi}
-    }%
-    \let\newblock\@empty
-    \sloppy
-    \sfcode`\.=1000\relax
+     \section[References]{%    <=== OPTIONAL ARGUMENT ADDED HERE
+        {References} % was uppercased but this affects pdf bookmarks (SP/GM October 2004)
+          {\vskip -9pt plus 1pt} % GM Nov. 2006 / GM July 2000 (for somewhat tighter spacing) 
+         \@mkboth{{\refname}}{{\refname}}%
+     }%
+     \list{[\arabic{enumi}]}{%
+         \settowidth\labelwidth{[#1]}%
+         \leftmargin\labelwidth
+         \advance\leftmargin\labelsep
+         \advance\leftmargin\bibindent
+         \parsep=0pt\itemsep=1pt % GM July 2000
+         \itemindent -\bibindent
+         \listparindent \itemindent
+         \usecounter{enumi}
+     }%
+     \let\newblock\@empty
+     \raggedright % GM July 2000
+     \sloppy
+     \sfcode`\.=1000\relax
 }
 
 
@@ -1210,7 +1333,8 @@
 
 \newcount\colcntr
 \global\colcntr=0
-\newbox\savebox
+%\newbox\savebox
+\newbox\saveb@x				% January 2008
 
 \gdef \@makecol {%
 \global\advance\colcntr by 1
@@ -1286,32 +1410,240 @@
 %%%%%%%%%%%%%%%%%%%%%%%%%
 \ps@plain
 \baselineskip=11pt
-
-%Put the SIGKDD footnote..Sunita Sarawagi, Jan 2000.
-\def\thepage{\hbox to \textwidth{\textcolor{blue}{
-SIGKDD Explorations.} \hfil Volume 4, Issue 2 - page \arabic{page}}}
-\parskip .2ex \parindent 0em
-
-\let\thepage\relax % For  NO page numbers - Gerry Nov. 30th. 1999
+\let\thepage\relax % For NO page numbers - GM Nov. 30th. 1999 and July 2000
 \def\setpagenumber#1{\global\setcounter{page}{#1}}
-%\pagenumbering{arabic}  % Arabic page numbers but commented out for NO page numbes - Gerry Nov. 30th. 1999
+%\pagenumbering{arabic}  % Arabic page numbers GM July 2000
 \twocolumn             % Double column.
 \flushbottom           % Even bottom -- alas, does not balance columns at end of document
-\pagestyle{empty}
+\pagestyle{plain}
 
 % Need Copyright Year and Copyright Data to be user definable (in .tex file).
 % Gerry Nov. 30th. 1999
 \newtoks\copyrtyr
 \newtoks\acmcopyr
 \newtoks\boilerplate
+\global\acmcopyr={X-XXXXX-XX-X/XX/XX}  % Default - 5/11/2001 *** Gerry
+\global\copyrtyr={20XX}                % Default - 3/3/2003 *** Gerry
 \def\CopyrightYear#1{\global\copyrtyr{#1}}
 \def\crdata#1{\global\acmcopyr{#1}}
 \def\permission#1{\global\boilerplate{#1}}
 %
+\global\boilerplate={Permission to make digital or hard copies of all or part of this work for personal or classroom use is granted without fee provided that copies are not made or distributed for profit or commercial advantage and that copies bear this notice and the full citation on the first page.  To copy otherwise, to republish, to post on servers or to redistribute to lists, requires prior specific permission and/or a fee.}
 \newtoks\copyrightetc
-\global\copyrightetc{\ } %  Need to have 'something' so that adequate space is left for pasting in a line if "confinfo" is supplied.
-
+\global\copyrightetc{Copyright \the\copyrtyr\ ACM \the\acmcopyr\ ...\$15.00} % Gerry changed to 15 May 2012
 \toappear{\the\boilerplate\par
-{\confname{\the\conf}} \the\confinfo\par \the\copyrightetc}
-% End of ACMPROC-SP.CLS -- V1.0SP - 11/30/1999 --
-% Gerry Murray -- November 30th.  1999
+{\confname{\the\conf}} \the\confinfo\par \the\copyrightetc.}
+%\DeclareFixedFont{\altcrnotice}{OT1}{tmr}{m}{n}{8}  % << patch needed for accenting e.g. Montreal - Gerry, May 2007
+%\DeclareFixedFont{\altconfname}{OT1}{tmr}{m}{it}{8}  % << patch needed for accenting in italicized confname - Gerry, May 2007
+%
+%{\altconfname{{\the\conf}}} {\altcrnotice\the\confinfo\par} \the\copyrightetc.}  % << Gerry, May 2007
+%
+% The following section (i.e. 3 .sty inclusions) was added in May 2007 so as to fix the problems that many
+% authors were having with accents. Sometimes accents would occur, but the letter-character would be of a different
+% font. Conversely the letter-character font would be correct but, e.g. a 'bar' would appear superimposed on the
+% character instead of, say, an unlaut/diaresis. Sometimes the letter-character would NOT appear at all.
+% Using [T1]{fontenc} outright was not an option as this caused 99% of the authors to 'produce' a Type-3 (bitmapped)
+% PDF file - useless for production. 
+%
+% For proper (font) accenting we NEED these packages to be part of the .cls file i.e. 'ae', 'aecompl' and 'aeguil' 
+% ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+%% This is file `ae.sty' 
+\def\fileversion{1.3}
+\def\filedate{2001/02/12}
+\NeedsTeXFormat{LaTeX2e}
+%\ProvidesPackage{ae}[\filedate\space\fileversion\space  % GM
+% Almost European Computer Modern]                       % GM - keeping the log file clean(er)
+\newif\if@ae@slides \@ae@slidesfalse
+\DeclareOption{slides}{\@ae@slidestrue}
+\ProcessOptions
+\fontfamily{aer}
+\RequirePackage[T1]{fontenc}
+\if@ae@slides
+    \renewcommand{\sfdefault}{laess}
+    \renewcommand{\rmdefault}{laess} % no roman
+    \renewcommand{\ttdefault}{laett}
+\else
+    \renewcommand{\sfdefault}{aess}
+    \renewcommand{\rmdefault}{aer}
+    \renewcommand{\ttdefault}{aett}
+\fi
+\endinput
+%% 
+%% End of file `ae.sty'.
+%
+%
+\def\fileversion{0.9}
+\def\filedate{1998/07/23}
+\NeedsTeXFormat{LaTeX2e}
+%\ProvidesPackage{aecompl}[\filedate\space\fileversion\space   % GM
+%T1 Complements for AE fonts (D. Roegel)]                      % GM -- keeping the log file clean(er)
+ 
+\def\@ae@compl#1{{\fontencoding{T1}\fontfamily{cmr}\selectfont\symbol{#1}}}
+\def\guillemotleft{\@ae@compl{19}}
+\def\guillemotright{\@ae@compl{20}}
+\def\guilsinglleft{\@ae@compl{14}}
+\def\guilsinglright{\@ae@compl{15}}
+\def\TH{\@ae@compl{222}}
+\def\NG{\@ae@compl{141}}
+\def\ng{\@ae@compl{173}}
+\def\th{\@ae@compl{254}}
+\def\DJ{\@ae@compl{208}}
+\def\dj{\@ae@compl{158}}
+\def\DH{\@ae@compl{208}}
+\def\dh{\@ae@compl{240}}
+\def\@perthousandzero{\@ae@compl{24}}
+\def\textperthousand{\%\@perthousandzero}
+\def\textpertenthousand{\%\@perthousandzero\@perthousandzero}
+\endinput
+%
+%
+%% This is file `aeguill.sty' 
+% This file gives french guillemets (and not guillemots!)
+% built with the Polish CMR fonts (default), WNCYR fonts, the LASY fonts 
+% or with the EC fonts. 
+% This is useful in conjunction with the ae package
+% (this package loads the ae package in case it has not been loaded)
+%  and with or without the french(le) package.
+%
+% In order to get the guillemets, it is necessary to either type
+% \guillemotleft and \guillemotright, or to use an 8 bit encoding
+% (such as ISO-Latin1) which selects these two commands, 
+% or, if you use the french package (but not the frenchle package), 
+% to type << or >>.
+%
+% By default, you get the Polish CMR guillemets; if this package is loaded
+% with the `cm' option, you get the LASY guillemets; with `ec,' you
+% get the EC guillemets, and with `cyr,' you get the cyrillic guillemets.
+%
+% In verbatim mode, you always get the EC/TT guillemets.
+%
+% The default option is interesting in conjunction with PDF,
+% because there is a Type 1 version of the Polish CMR fonts
+% and these guillemets are very close in shape to the EC guillemets.
+% There are no free Type 1 versions of the EC fonts.
+%
+% Support for Polish CMR guillemets was kindly provided by 
+% Rolf Niepraschk <niepraschk@ptb.de> in version 0.99 (2000/05/22).
+% Bernd Raichle provided extensive simplifications to the code
+% for version 1.00.
+%
+% This package is released under the LPPL.
+%
+% Changes:
+%   Date        version
+%   2001/04/12  1.01    the frenchle and french package are now distinguished.
+%
+\def\fileversion{1.01}
+\def\filedate{2001/04/12}
+\NeedsTeXFormat{LaTeX2e}
+%\ProvidesPackage{aeguill}[2001/04/12 1.01 %    % GM
+%AE fonts with french guillemets (D. Roegel)]   % GM - keeping the log file clean(er)
+%\RequirePackage{ae}  % GM May 2007 - already embedded here
+
+\newcommand{\@ae@switch}[4]{#4}
+\DeclareOption{ec}{\renewcommand\@ae@switch[4]{#1}}
+\DeclareOption{cm}{\renewcommand\@ae@switch[4]{#2}}
+\DeclareOption{cyr}{\renewcommand\@ae@switch[4]{#3}}
+\DeclareOption{pl}{\renewcommand\@ae@switch[4]{#4}}
+\ExecuteOptions{pl}
+\ProcessOptions
+
+%
+% Load necessary packages
+%
+\@ae@switch{% ec
+  % do nothing
+}{% cm
+  \RequirePackage{latexsym}%  GM - May 2007 - already 'mentioned as required' up above
+}{% cyr
+  \RequirePackage[OT2,T1]{fontenc}%
+}{% pl
+  \RequirePackage[OT4,T1]{fontenc}%
+}
+
+% The following command will be compared to \frenchname,
+% as defined in french.sty and frenchle.sty.
+\def\aeguillfrenchdefault{french}%
+
+\let\guill@verbatim@font\verbatim@font
+\def\verbatim@font{\guill@verbatim@font\ecguills{cmtt}%
+                   \let\guillemotleft\@oguills\let\guillemotright\@fguills}
+
+\begingroup \catcode`\<=13 \catcode`\>=13
+\def\x{\endgroup
+ \def\ae@lfguill{<<}%
+ \def\ae@rfguill{>>}%
+}\x
+
+\newcommand{\ecguills}[1]{%
+  \def\selectguillfont{\fontencoding{T1}\fontfamily{#1}\selectfont}%
+  \def\@oguills{{\selectguillfont\symbol{19}}}%
+  \def\@fguills{{\selectguillfont\symbol{20}}}%
+  } 
+
+\newcommand{\aeguills}{%
+  \ae@guills
+  % We redefine \guillemotleft and \guillemotright
+  % in order to catch them when they are used 
+  % with \DeclareInputText (in latin1.def for instance)
+  % We use \auxWARNINGi as a safe indicator that french.sty is used.
+  \gdef\guillemotleft{\ifx\auxWARNINGi\undefined
+                         \@oguills % neither french.sty nor frenchle.sty
+                      \else
+                         \ifx\aeguillfrenchdefault\frenchname
+                           \ae@lfguill  % french.sty
+                         \else
+                           \@oguills    % frenchle.sty
+                         \fi
+                      \fi}%
+  \gdef\guillemotright{\ifx\auxWARNINGi\undefined
+                         \@fguills % neither french.sty nor frenchle.sty
+                       \else
+                         \ifx\aeguillfrenchdefault\frenchname
+                           \ae@rfguill  % french.sty
+                         \else
+                           \@fguills    % frenchle.sty
+                         \fi
+                       \fi}%
+  }
+
+%
+% Depending on the class option
+% define the internal command \ae@guills
+\@ae@switch{% ec
+  \newcommand{\ae@guills}{%
+    \ecguills{cmr}}%
+}{% cm
+  \newcommand{\ae@guills}{%
+    \def\selectguillfont{\fontencoding{U}\fontfamily{lasy}%
+            \fontseries{m}\fontshape{n}\selectfont}%
+    \def\@oguills{\leavevmode\nobreak
+                \hbox{\selectguillfont (\kern-.20em(\kern.20em}\nobreak}%
+    \def\@fguills{\leavevmode\nobreak
+                \hbox{\selectguillfont \kern.20em)\kern-.2em)}%
+                \ifdim\fontdimen\@ne\font>\z@\/\fi}}%
+}{% cyr
+  \newcommand{\ae@guills}{%
+    \def\selectguillfont{\fontencoding{OT2}\fontfamily{wncyr}\selectfont}%
+    \def\@oguills{{\selectguillfont\symbol{60}}}%
+    \def\@fguills{{\selectguillfont\symbol{62}}}}
+}{% pl
+  \newcommand{\ae@guills}{%
+    \def\selectguillfont{\fontencoding{OT4}\fontfamily{cmr}\selectfont}%
+    \def\@oguills{{\selectguillfont\symbol{174}}}%
+    \def\@fguills{{\selectguillfont\symbol{175}}}}
+}
+
+
+\AtBeginDocument{%
+  \ifx\GOfrench\undefined
+    \aeguills
+  \else
+    \let\aeguill@GOfrench\GOfrench
+    \gdef\GOfrench{\aeguill@GOfrench \aeguills}%
+  \fi
+  }
+
+\endinput
+%
+
