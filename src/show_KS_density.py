@@ -5,7 +5,7 @@ import numpy as np
 import sys
 import os
 from roll import create_rolling_histogram_class, create_bucket_class
-from roll import gen_value, get_KS
+from roll import gen_value, get_KS, get_jaccard_distance
 from decay_equations import find_optimal_decay
 import time
 
@@ -46,7 +46,8 @@ def ergodic_chain(args):
         rh_fast.update(val)
         cdf_long = rh_slow.get_CDF()
         cdf_short = rh_fast.get_CDF()
-        KS = get_KS(cdf_long, cdf_short)
+        KS = get_jaccard_distance(cdf_long, cdf_short)
+        #KS = get_KS(cdf_long, cdf_short)
         data.append(KS)
     return data
 
@@ -56,7 +57,7 @@ def chart():
     total_work = multiprocessing.cpu_count()
 
     for alpha_count_slow in [0.001]:
-        for alpha_count_fast in [0.01, 0.007, 0.005, 0.003]:
+        for alpha_count_fast in [0.01]:
             burnin = 100000
             run_length = 25000
             #alpha_count_slow = 0.001
@@ -86,7 +87,7 @@ def chart():
 def main():
     total_work = multiprocessing.cpu_count()
     burnin = 20000
-    significance_samples = 2000000
+    significance_samples = 200000
     per_process_samples = significance_samples / multiprocessing.cpu_count()
     alpha_count_slow = 0.001
     alpha_count_fast = find_optimal_decay(alpha_count_slow)

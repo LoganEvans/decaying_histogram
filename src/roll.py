@@ -192,7 +192,7 @@ def create_rolling_histogram_class(Bucket=create_bucket_class(),
             acc = 0.0
             for bucket in self.bucket_list:
                 acc += bucket.density()
-                cdf.append([bucket._upper_bound, acc])
+                cdf.append([bucket.upper_bound(), acc])
             return cdf
 
         def delete_bucket(self, bucket_idx):
@@ -293,6 +293,34 @@ def create_rolling_histogram_class(Bucket=create_bucket_class(),
     return RollingHistogram
 
 
+def get_jaccard_distance(cdf0, cdf1):
+    x_values = sorted(set(zip(*cdf0)[0] + zip(*cdf1)[0]))
+    new_cdf0 = [[x, None] for x in x_values]
+    new_cdf1 = [[x, None] for x in x_values]
+
+    def redistribute(cdf, new_cdf):
+        insert_idx = 0
+        for i in range(len(cdf) - 1):
+            slope = (cdf[i + 1][1] - cdf[i][1]) / (cdf[i + 1][0] - cdf[i][0])
+            while new_cdf[insert_idx][0] < cdf[i + 1][0]:
+                if insert_idx == len(new_cdf):
+                    break
+                new_cdf[insert_idx][1] = (
+                        cdf[i][1] + slope * (new_cdf[insert_idx][0] - cdf[i][0]))
+                insert_idx += 1
+        new_cdf[-1][1] = 1.0
+
+    redistribute(cdf0, new_cdf0)
+    redistribute(cdf1, new_cdf1)
+
+    intersection = 0.0
+    union = 0.0
+    for i in range(len(new_cdf0)):
+        intersection += min(new_cdf0[i][1], new_cdf1[i][1])
+        union += max(new_cdf0[i][1], new_cdf1[i][1])
+    return 1.0 - intersection / union
+
+
 def get_KS(cdf0, cdf1):
     idx0, idx1 = 0, 0
     KS = 0.0
@@ -362,7 +390,7 @@ if __name__ == '__main__':
     d = stats.norm(0, 1)
 
     ts_data = []
-    size = 500000
+    size = 5000
 
     dists = [stats.expon(-2, 2), stats.norm(4, 2), stats.norm(-6, 1)]
     for i in range(1):
@@ -379,8 +407,13 @@ if __name__ == '__main__':
                 target_buckets=50)()
 
         for val in gen_value(dists[:2], size):
-    #       rh_slow.update(val)
+            rh_slow.update(val)
             rh_fast.update(val)
+
+        cdf_long = rh_slow.get_CDF()
+        cdf_short = rh_fast.get_CDF()
+        print get_jaccard_distance(cdf_short, cdf_long)
+
     #       cdf_long = rh_slow.get_CDF()
     #       cdf_short = rh_fast.get_CDF()
     #       #data.append(get_KS(cdf_long, cdf_short))
