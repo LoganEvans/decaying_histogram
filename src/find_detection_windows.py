@@ -11,7 +11,7 @@ import time
 
 import decay_equations
 import datasets
-from show_KS_density import ergodic_chain, simple_histogram
+from show_density import ergodic_chain, simple_histogram
 
 
 dist0 = stats.norm(0, 1)

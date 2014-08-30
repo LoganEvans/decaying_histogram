@@ -293,22 +293,23 @@ def create_rolling_histogram_class(Bucket=create_bucket_class(),
     return RollingHistogram
 
 
-def get_jaccard_distance(cdf0, cdf1):
+def redistribute(cdf, new_cdf):
+    insert_idx = 0
+    for i in range(len(cdf) - 1):
+        slope = (cdf[i + 1][1] - cdf[i][1]) / (cdf[i + 1][0] - cdf[i][0])
+        while new_cdf[insert_idx][0] < cdf[i + 1][0]:
+            if insert_idx == len(new_cdf):
+                break
+            new_cdf[insert_idx][1] = (
+                    cdf[i][1] + slope * (new_cdf[insert_idx][0] - cdf[i][0]))
+            insert_idx += 1
+    new_cdf[-1][1] = 1.0
+
+
+def calc_jaccard_distance(cdf0, cdf1):
     x_values = sorted(set(zip(*cdf0)[0] + zip(*cdf1)[0]))
     new_cdf0 = [[x, None] for x in x_values]
     new_cdf1 = [[x, None] for x in x_values]
-
-    def redistribute(cdf, new_cdf):
-        insert_idx = 0
-        for i in range(len(cdf) - 1):
-            slope = (cdf[i + 1][1] - cdf[i][1]) / (cdf[i + 1][0] - cdf[i][0])
-            while new_cdf[insert_idx][0] < cdf[i + 1][0]:
-                if insert_idx == len(new_cdf):
-                    break
-                new_cdf[insert_idx][1] = (
-                        cdf[i][1] + slope * (new_cdf[insert_idx][0] - cdf[i][0]))
-                insert_idx += 1
-        new_cdf[-1][1] = 1.0
 
     redistribute(cdf0, new_cdf0)
     redistribute(cdf1, new_cdf1)
@@ -321,7 +322,39 @@ def get_jaccard_distance(cdf0, cdf1):
     return 1.0 - intersection / union
 
 
-def get_KS(cdf0, cdf1):
+def calc_cramer_von_mises_criterion(cdf0, cdf1):
+    """XXX This seems wrong..."""
+    x_values = sorted(set(zip(*cdf0)[0] + zip(*cdf1)[0]))
+    new_cdf0 = [[x, None] for x in x_values]
+    new_cdf1 = [[x, None] for x in x_values]
+
+    redistribute(cdf0, new_cdf0)
+    redistribute(cdf1, new_cdf1)
+
+    g = lambda t: np.abs(new_cdf0[t][1] - new_cdf1[t][1]) ** 3 / 3.0
+    acc = 0.0
+    for i in range(len(new_cdf0)):
+        acc += g(i)
+    return acc
+
+
+def calc_kullback_leibler_divergence(cdf0, cdf1):
+    x_values = sorted(set(zip(*cdf0)[0] + zip(*cdf1)[0]))
+    new_cdf0 = [[x, None] for x in x_values]
+    new_cdf1 = [[x, None] for x in x_values]
+    dist0 = [None for x in range(len(x_values) - 1)]
+    dist1 = [None for x in range(len(x_values) - 1)]
+
+    redistribute(cdf0, new_cdf0)
+    redistribute(cdf1, new_cdf1)
+
+    for i in range(1, len(new_cdf0)):
+        dist0[i - 1] = new_cdf0[i][1] - new_cdf0[i - 1][1]
+        dist1[i - 1] = new_cdf1[i][1] - new_cdf1[i - 1][1]
+
+    return stats.entropy(dist0, dist1)
+
+def calc_KS(cdf0, cdf1):
     idx0, idx1 = 0, 0
     KS = 0.0
     partial0 = 0.0
@@ -412,25 +445,27 @@ if __name__ == '__main__':
 
         cdf_long = rh_slow.get_CDF()
         cdf_short = rh_fast.get_CDF()
-        print get_jaccard_distance(cdf_short, cdf_long)
+        #print calc_jaccard_distance(cdf_short, cdf_long)
+        #print calc_cramer_von_mises_criterion(cdf_short, cdf_long)
+        print calc_kullback_leibler_divergence(cdf_short, cdf_long)
 
     #       cdf_long = rh_slow.get_CDF()
     #       cdf_short = rh_fast.get_CDF()
-    #       #data.append(get_KS(cdf_long, cdf_short))
+    #       #data.append(calc_KS(cdf_long, cdf_short))
 
     #   for val in gen_value(dists[2:], size):
     #       rh_slow.update(val)
     #       rh_fast.update(val)
     #       cdf_long = rh_slow.get_CDF()
     #       cdf_short = rh_fast.get_CDF()
-    #       #data.append(get_KS(cdf_long, cdf_short))
+    #       #data.append(calc_KS(cdf_long, cdf_short))
 
     #   for val in gen_value(dists[:2], size):
     #       rh_slow.update(val)
     #       rh_fast.update(val)
     #       cdf_long = rh_slow.get_CDF()
     #       cdf_short = rh_fast.get_CDF()
-    #       #data.append(get_KS(cdf_long, cdf_short))
+    #       #data.append(calc_KS(cdf_long, cdf_short))
 
         #ts_data.append(data)
     #simple_histogram(data)

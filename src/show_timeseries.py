@@ -32,7 +32,7 @@ if __name__ == '__main__':
             rh_fast.update(val)
             cdf_long = rh_slow.get_CDF()
             cdf_short = rh_fast.get_CDF()
-            data.append(get_jaccard_distance(cdf_long, cdf_short))
+            data.append(calc_jaccard_distance(cdf_long, cdf_short))
 
     #   #for val in gen_value(dists[:2], size):
     #   for val in gen_value([stats.norm(0, 1)], size):
@@ -40,7 +40,7 @@ if __name__ == '__main__':
     #       rh_fast.update(val)
     #       cdf_long = rh_slow.get_CDF()
     #       cdf_short = rh_fast.get_CDF()
-    #       data.append(get_KS(cdf_long, cdf_short))
+    #       data.append(calc_KS(cdf_long, cdf_short))
 
     #   #for val in gen_value(dists[2:3], size):
     #   for val in gen_value([stats.norm(0, 2)], size):
@@ -48,7 +48,7 @@ if __name__ == '__main__':
     #       rh_fast.update(val)
     #       cdf_long = rh_slow.get_CDF()
     #       cdf_short = rh_fast.get_CDF()
-    #       data.append(get_KS(cdf_long, cdf_short))
+    #       data.append(calc_KS(cdf_long, cdf_short))
 
     #   #for val in gen_value(dists[:2], size):
     #   for val in gen_value([stats.norm(0, 1)], size):
@@ -56,7 +56,7 @@ if __name__ == '__main__':
     #       rh_fast.update(val)
     #       cdf_long = rh_slow.get_CDF()
     #       cdf_short = rh_fast.get_CDF()
-    #       data.append(get_KS(cdf_long, cdf_short))
+    #       data.append(calc_KS(cdf_long, cdf_short))
 
         ts_data.append(data)
     #simple_histogram(data)
