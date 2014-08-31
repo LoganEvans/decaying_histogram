@@ -61,8 +61,8 @@ def ergodic_chain(args):
 
 def main():
     total_work = multiprocessing.cpu_count()
-    burnin = 20000
-    significance_samples = 10000000
+    burnin = 30000
+    significance_samples = 1000000
     per_process_samples = significance_samples / multiprocessing.cpu_count()
     alpha_count_slow = 0.001
     alpha_count_fast = find_optimal_decay(alpha_count_slow)
