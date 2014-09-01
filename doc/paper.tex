@@ -88,9 +88,10 @@
         \sum_{B \in H} |B| = |S|.
     \end{displaymath}
 
-    In contrast, for the decaying histogram with a decay rate of $\alpha$, we
-    need to know how many points have been produced more recently than a given
-    point $X$. Using the $\age(X)$ to represent this quantity, we have
+    In contrast, for the decaying histogram with a decay rate of $\alpha$, the
+    contribution of any single point $X$ is determined by the number of points
+    that have been produced more recently than $X$. Using the $\age(X)$ to
+    represent this quantity, we have
 
     \begin{displaymath}
         |B| = \sum_{X \in S} [B_l \leq X < B_u] (1 - \alpha)^{\age(X)} .
@@ -253,6 +254,20 @@
 \section{Optimal Values for Tuning Parameters}
 \label{sec:optimalTuningParameters}
 \subsection{Count Decay Rate of the Fast Histogram}
+    Given the histograms $H_0$ and $H_1$, the value $\alpha_0$, and the
+    relationship ${\alpha_0 < \alpha_1}$, meaning that $H_0$ is the slow-decay
+    histogram and $H_1$ is the fast-decay histogram, it is possible to identify
+    the value $\alpha_1$ that will maximize the power to detect changepoints.
+
+    The outline of the process is this: if two decaying histograms have
+    equal density approximations, one can imagine a changepoint where the
+    source distributions before and after the change don't share a common
+    domain. We can then identify the update cycle where the amount of
+    overlapping area is minimized. This equation can then be minimized with
+    respect to the variable $\alpha_1$.
+
+
+
 \subsection{Target Bucket Count}
 \subsection{Average Value of a Bucket}
 
