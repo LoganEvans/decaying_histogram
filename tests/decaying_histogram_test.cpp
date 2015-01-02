@@ -30,6 +30,26 @@
 #include "gtest/gtest.h"
 
 TEST(TestCase1, Test1) {
-    EXPECT_EQ(2, dummy(1));
+    struct bucket buckets[3];
+    init_bucket(&buckets[0], NULL, NULL);
+    init_bucket(&buckets[1], &buckets[0], &buckets[2]);
+    init_bucket(&buckets[2], NULL, &buckets[2]);
+    for (int idx = 0; idx < 3; idx++) {
+        EXPECT_EQ(0.0, buckets[idx].alpha_mu);
+        EXPECT_EQ(0.0, buckets[idx].alpha_count);
+        EXPECT_EQ(0.0, buckets[idx].count);
+        EXPECT_EQ(0.0, buckets[idx].mu);
+        EXPECT_EQ(0.0, buckets[idx].min);
+        EXPECT_EQ(0.0, buckets[idx].max);
+        EXPECT_EQ(0.0, buckets[idx].lower_bound);
+        EXPECT_EQ(0.0, buckets[idx].upper_bound);
+        EXPECT_EQ(0, buckets[idx].last_decay_generation);
+    }
+    EXPECT_EQ(NULL, buckets[0].below);
+    EXPECT_EQ(NULL, buckets[0].above);
+    EXPECT_EQ(&buckets[0], buckets[1].below);
+    EXPECT_EQ(&buckets[2], buckets[1].above);
+    EXPECT_EQ(NULL, buckets[2].below);
+    EXPECT_EQ(&buckets[2], buckets[2].above);
 }
 

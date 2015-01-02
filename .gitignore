@@ -98,4 +98,7 @@ Makefile.in
 .dirstamp
 *.o
 *~
+src/main
+tests/decaying_histogram_test
+tests/decaying_histogram_test.trs
 

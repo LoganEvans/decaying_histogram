@@ -29,10 +29,7 @@
 #include <stdio.h>
 #include "decaying_histogram.h"
 
-int main()
-{
-    printf("dummy(5): %d", dummy(5));
-
+int main() {
     return 0;
 }
 
