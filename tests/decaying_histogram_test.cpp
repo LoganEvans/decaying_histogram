@@ -117,7 +117,7 @@ TEST_F(HistogramTest, DensitySumsToOne) {
         (histogram_->bucket_list[idx].upper_bound -
          histogram_->bucket_list[idx].lower_bound);
   }
-  EXPECT_EQ(1.0, acc);
+  EXPECT_NEAR(1.0, acc, 1e-9);
 }
 
 TEST_F(HistogramTest, TotalCount) {
@@ -131,11 +131,8 @@ TEST_F(HistogramTest, TotalCount) {
   }
 
   EXPECT_LT(0, histogram_->num_buckets);
-  EXPECT_NEAR(count, total_count(histogram_), 0.0000001);
+  EXPECT_NEAR(count, total_count(histogram_), 1e-9);
 
-  cout << count << endl;
-  cout << histogram_->num_buckets << endl;
-  cout << histogram_->max_num_buckets << endl;
   sprint_histogram_new(histogram_, NULL);
 }
 

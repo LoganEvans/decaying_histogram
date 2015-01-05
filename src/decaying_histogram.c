@@ -66,6 +66,7 @@ bool is_in_bucket(struct bucket *bucket, double observation) {
 /* Both buckets should be decayed before this is called. */
 void recompute_bound(struct bucket *lower, struct bucket *upper) {
   double bound;
+  // TODO: This might need to check against DBL_MAX.
 
   if (lower == NULL && upper->above == NULL) {
     // Only one bin exists. Since we don't have any other way to compute
@@ -104,7 +105,6 @@ void recompute_bound(struct bucket *lower, struct bucket *upper) {
 void decay(struct bucket *bucket, uint64_t generation) {
   if (bucket == NULL || bucket->last_decay_generation == generation)
     return;
-  assert(bucket->alpha == 0.001);
   bucket->count *= pow(
       1.0 - bucket->alpha,
       generation - bucket->last_decay_generation);
@@ -206,7 +206,6 @@ void full_refresh(struct decaying_histogram *histogram) {
         break; /* delete_bucket reorders the buckets */
       } else if (finished_deletes &&
           bucket->count > histogram->split_bucket_threshold) {
-        assert(histogram->num_buckets < histogram->max_num_buckets);
         split_bucket(histogram, idx);
         do_another_round = true;
         break;
@@ -281,8 +280,6 @@ void delete_bucket(
     struct decaying_histogram *histogram, int bucket_idx) {
   int lucky_idx, idx;
   struct bucket *lucky_bucket, *dying_bucket;
-  printf(" > delete_bucket(%d)\n", bucket_idx);
-  assert_consistent(histogram);
 
   if (histogram->num_buckets <= 2)
     return;  // Let's not.
@@ -299,8 +296,9 @@ void delete_bucket(
   dying_bucket = &histogram->bucket_list[bucket_idx];
   lucky_bucket = &histogram->bucket_list[lucky_idx];
   lucky_bucket->mu =
-      lucky_bucket->mu * lucky_bucket->count +
-      dying_bucket->mu * dying_bucket->count;
+      (lucky_bucket->mu * lucky_bucket->count +
+       dying_bucket->mu * dying_bucket->count) /
+      (lucky_bucket->count + dying_bucket->count);
   lucky_bucket->count += dying_bucket->count;
 
   // Shift everything left.
@@ -319,17 +317,19 @@ void delete_bucket(
   }
   --histogram->num_buckets;
   histogram->bucket_list[histogram->num_buckets].below = NULL;
-  histogram->bucket_list[histogram->num_buckets].above = NULL;
+  histogram->bucket_list[histogram->num_buckets - 1].above = NULL;
 
-  recompute_bound(
-      &histogram->bucket_list[bucket_idx - 1],
-      &histogram->bucket_list[bucket_idx]);
-  recompute_bound(
-      &histogram->bucket_list[bucket_idx],
-      &histogram->bucket_list[bucket_idx + 1]);
+  if (bucket_idx > 0) {
+    recompute_bound(
+        &histogram->bucket_list[bucket_idx - 1],
+        &histogram->bucket_list[bucket_idx]);
+  }
+  if (bucket_idx + 1 < histogram->num_buckets) {
+    recompute_bound(
+        &histogram->bucket_list[bucket_idx],
+        &histogram->bucket_list[bucket_idx + 1]);
+  }
 
-  printf(" < delete_bucket()\n");
-  assert_consistent(histogram);
   return;
 }
 
@@ -338,8 +338,6 @@ void split_bucket(
   int idx;
   double diameter, median;
   struct bucket *left, *right, *far_right;
-  printf(" > split_bucket(%d) %d\n", bucket_idx, histogram->num_buckets);
-  assert_consistent(histogram);
 
   if (histogram->num_buckets == 2 &&
       histogram->bucket_list[0].mu == histogram->bucket_list[1].mu) {
@@ -347,6 +345,7 @@ void split_bucket(
     // making more than two buckets until we have observed two unique values.
     return;
   }
+  assert(histogram->num_buckets < histogram->max_num_buckets);
 
   // Shift everything right.
   for (idx = histogram->num_buckets; idx > bucket_idx; idx--) {
@@ -362,12 +361,14 @@ void split_bucket(
     //histogram->bucket_list[idx].below = histogram->bucket_list[idx - 1].below;
     //histogram->bucket_list[idx].above = histogram->bucket_list[idx - 1].above;
   }
-  histogram->bucket_list[histogram->num_buckets - 1].above =
-      &histogram->bucket_list[histogram->num_buckets];
   histogram->bucket_list[histogram->num_buckets].above = NULL;
   if (histogram->num_buckets > 0) {
+    histogram->bucket_list[histogram->num_buckets - 1].above =
+        &histogram->bucket_list[histogram->num_buckets];
     histogram->bucket_list[histogram->num_buckets].below =
         &histogram->bucket_list[histogram->num_buckets - 1];
+  } else {
+    histogram->bucket_list[histogram->num_buckets].below = NULL;
   }
   ++histogram->num_buckets;
 
@@ -405,8 +406,6 @@ void split_bucket(
   recompute_bound(left->below, left);
   recompute_bound(left, right);
   recompute_bound(right, right->above);
-  printf(" < split_bucket()\n");
-  assert_consistent(histogram);
 
   return;
 }
@@ -425,12 +424,19 @@ double Kolomogorov_Smirnov_statistic(
 
 void assert_consistent(struct decaying_histogram *histogram) {
   int idx;
+  struct bucket *bucket;
+
+  assert(histogram->num_buckets <= histogram->max_num_buckets);
+  assert(histogram->num_buckets > 0);
 
   for (idx = 0; idx < histogram->num_buckets; idx++)
     decay(&histogram->bucket_list[idx], histogram->generation);
   for (idx = 0; idx < histogram->num_buckets - 1; idx++) {
-    recompute_bound(
-        &histogram->bucket_list[idx], &histogram->bucket_list[idx + 1]);
+    bucket = &histogram->bucket_list[idx];
+    recompute_bound(bucket, &histogram->bucket_list[idx + 1]);
+    assert(
+        bucket->lower_bound <= bucket->mu &&
+        bucket->mu <= bucket->upper_bound);
   }
 
   recompute_bound(NULL, &histogram->bucket_list[0]);
