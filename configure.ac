@@ -1,3 +1,29 @@
+# Copyright (c) 2013, Jon Haggblad
+# All rights reserved.
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions are met:
+#
+#   * Redistributions of source code must retain the above copyright notice, this
+#     list of conditions and the following disclaimer.
+#   * Redistributions in binary form must reproduce the above copyright notice,
+#     this list of conditions and the following disclaimer in the documentation
+#     and/or other materials provided with the distribution.
+#   * Neither the name of the Jon Haggblad nor the names of its contributors
+#     may be used to endorse or promote products derived from this software without
+#     specific prior written permission.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+# ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+# WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+# DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+# FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+# DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+# SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+# CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+# OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
 AC_PREREQ([2.69])
 AC_INIT([decaying-histogram], [0.2.0], [loganpevans@gmail.com])
 AC_CONFIG_SRCDIR([src/decaying_histogram.h])
@@ -29,7 +55,7 @@ AC_ARG_ENABLE([gcc-warnings],
                     [turn on lots of GCC warnings (for developers)])],
     [case "$enableval" in
         yes|no) ;;
-        *)      AC_MSG_ERROR([bad value ${enableval} for gcc-warnings option]) ;; 
+        *)      AC_MSG_ERROR([bad value ${enableval} for gcc-warnings option]) ;;
     esac
     gcc_warnings=$enableval],
     [gcc_warnings=no]
@@ -46,7 +72,7 @@ AC_ARG_ENABLE([gcc-debug],
                     [turn on GCC debug flags (for developers)])],
     [case "$enableval" in
         yes|no) ;;
-        *)      AC_MSG_ERROR([bad value ${enableval} for gcc-debug option]) ;; 
+        *)      AC_MSG_ERROR([bad value ${enableval} for gcc-debug option]) ;;
     esac
     gcc_debug=$enableval],
     [gcc_debug=no]
@@ -62,7 +88,7 @@ fi
 # Configure pthreads.
 ACX_PTHREAD([have_pthread=yes])
 
-# Define gtest variables 
+# Define gtest variables
 GTEST_VERSION="1.7.0"
 if test "x$have_pthread" = "xyes"; then
   GTEST_CPPFLAGS="-DGTEST_HAS_PTHREAD=1"
@@ -114,7 +140,7 @@ Configure Information:
     LDFLAGS         :   $LDFLAGS
     LIBS            :   $LIBS
 
-  Google Test 
+  Google Test
     GTEST_CPPFLAGS  : $GTEST_CPPFLAGS
     GTEST_CXXFLAGS  : $GTEST_CXXFLAGS
     GTEST_LDFLAGS   : $GTEST_LDFLAGS
