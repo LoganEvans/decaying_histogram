@@ -165,15 +165,6 @@ def create_rolling_histogram_class(Bucket=create_bucket_class(),
             bucket = self.bucket_list[bucket_idx]
             bucket.update(observation)
 
-            '''
-            c = 0
-            for bucket in self.bucket_list:
-                bucket.decay()
-                c += bucket.count
-            print c
-            time.sleep(0.007)
-            '''
-
             if bucket.count < self.delete_bucket_threshold:
                 self.full_refresh()
             if bucket.count > self.split_bucket_threshold:

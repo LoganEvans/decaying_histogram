@@ -71,11 +71,11 @@ void init_decaying_histogram(
     struct decaying_histogram *histogram, int target_buckets,
     double alpha);
 double total_count(struct decaying_histogram *histogram);
-void destroy_buckets(struct decaying_histogram *histogram);
+void clean_decaying_histogram(struct decaying_histogram *histogram);
 int find_bucket_idx(struct decaying_histogram *histogram, double observation);
 void full_refresh(struct decaying_histogram *histogram);
 void add_observation(struct decaying_histogram *histogram, double observation);
-void sprint_histogram_new(struct decaying_histogram *histogram, char **str);
+void print_histogram(struct decaying_histogram *histogram);
 void delete_bucket(
     struct decaying_histogram *histogram, int bucket_idx);
 void split_bucket(struct decaying_histogram *histogram, int bucket_idx);

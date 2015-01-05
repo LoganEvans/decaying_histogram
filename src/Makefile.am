@@ -3,4 +3,4 @@ AM_LDFLAGS = -lm
 
 bin_PROGRAMS = main
 
-main_SOURCES = main.c decaying_histogram.c
+main_SOURCES = main.cpp decaying_histogram.c

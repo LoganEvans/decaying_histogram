@@ -28,8 +28,24 @@
 
 #include <stdio.h>
 #include "decaying_histogram.h"
+#include <random>
 
 int main() {
-    return 0;
+  std::default_random_engine generator;
+  std::normal_distribution<double> normal;
+
+  double alpha = 0.000001;
+  int target_buckets = 200;
+  struct decaying_histogram *histogram = new struct decaying_histogram;
+
+  init_decaying_histogram(histogram, target_buckets, alpha);
+
+  for (int i = 0; i < 100000000; i++) {
+    add_observation(histogram, normal(generator));
+  }
+
+  print_histogram(histogram);
+
+  return 0;
 }
 

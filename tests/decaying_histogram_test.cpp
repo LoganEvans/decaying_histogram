@@ -49,7 +49,7 @@ class HistogramTest : public testing::Test {
   }
 
   virtual void TearDown() {
-    destroy_buckets(histogram_);
+    clean_decaying_histogram(histogram_);
     delete histogram_;
   }
 
@@ -118,6 +118,7 @@ TEST_F(HistogramTest, DensitySumsToOne) {
          histogram_->bucket_list[idx].lower_bound);
   }
   EXPECT_NEAR(1.0, acc, 1e-9);
+  print_histogram(histogram_);
 }
 
 TEST_F(HistogramTest, TotalCount) {
@@ -132,8 +133,6 @@ TEST_F(HistogramTest, TotalCount) {
 
   EXPECT_LT(0, histogram_->num_buckets);
   EXPECT_NEAR(count, total_count(histogram_), 1e-9);
-
-  sprint_histogram_new(histogram_, NULL);
 }
 
 TEST(HistogramBucketTest, BucketInit) {

@@ -158,7 +158,7 @@ double total_count(struct decaying_histogram *histogram) {
       histogram->alpha;
 }
 
-void destroy_buckets(struct decaying_histogram *histogram) {
+void clean_decaying_histogram(struct decaying_histogram *histogram) {
   free(histogram->bucket_list);
 }
 
@@ -227,7 +227,6 @@ void full_refresh(struct decaying_histogram *histogram) {
 }
 
 
-
 void add_observation(
     struct decaying_histogram *histogram, double observation) {
   int bucket_idx;
@@ -256,21 +255,25 @@ void add_observation(
     full_refresh(histogram);
 }
 
-void sprint_histogram_new(struct decaying_histogram *histogram, char **str) {
+void print_histogram(struct decaying_histogram *histogram) {
   int idx;
-  struct bucket *bucket;
 
-  for (idx = 0; idx < histogram->num_buckets; idx++) {
-    bucket = &histogram->bucket_list[idx];
-    printf("[%lf, %lf] | %lf, %lf\n",
-        bucket->lower_bound, bucket->upper_bound,
-        density(histogram, bucket),
-        density(histogram, &histogram->bucket_list[idx]) *
-          (histogram->bucket_list[idx].upper_bound -
-           histogram->bucket_list[idx].lower_bound)
-        );
+  full_refresh(histogram);
+  printf("[");
+  for (idx = 0; idx < histogram->num_buckets - 1; idx++) {
+    printf("%lf, ", density(histogram, &histogram->bucket_list[idx]));
   }
-  return;
+  printf(
+      "%lf]\n",
+      density(histogram, &histogram->bucket_list[histogram->num_buckets - 1]));
+
+  printf("[");
+  for (idx = 0; idx < histogram->num_buckets; idx++) {
+    printf("%lf, ", histogram->bucket_list[idx].lower_bound);
+  }
+  printf(
+      "%lf]\n",
+      histogram->bucket_list[histogram->num_buckets - 1].upper_bound);
 }
 
 /*
