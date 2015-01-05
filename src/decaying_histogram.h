@@ -62,6 +62,7 @@ struct decaying_histogram {
   struct bucket *bucket_list;
   int num_buckets;
   int max_num_buckets;
+  double *pow_table;
 };
 
 void init_decaying_histogram(
@@ -77,7 +78,8 @@ void print_histogram(struct decaying_histogram *histogram);
 void delete_bucket(
     struct decaying_histogram *histogram, int bucket_idx);
 void split_bucket(struct decaying_histogram *histogram, int bucket_idx);
-double density(struct decaying_histogram* histogram, struct bucket *bucket);
+double density(struct decaying_histogram *histogram, struct bucket *bucket);
+double get_decay(struct decaying_histogram *histogram, int missed_generations);
 double Jaccard_distance(
     struct decaying_histogram *hist0, struct decaying_histogram *hist1);
 double Kolomogorov_Smirnov_statistic(

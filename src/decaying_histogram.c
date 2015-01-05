@@ -94,12 +94,14 @@ void recompute_bound(struct bucket *lower, struct bucket *upper) {
 /*
  * This can efficiently apply the decay for multiple generations.
  */
-void decay(struct decaying_histogram * histogram, struct bucket *bucket) {
+void decay(struct decaying_histogram *histogram, struct bucket *bucket) {
   if (bucket == NULL || bucket->last_decay_generation == histogram->generation)
     return;
-  bucket->count *= pow(
-      1.0 - bucket->alpha,
-      histogram->generation - bucket->last_decay_generation);
+  bucket->count *= get_decay(
+      histogram, histogram->generation - bucket->last_decay_generation);
+  //bucket->count *= pow(
+  //    1.0 - bucket->alpha,
+  //    histogram->generation - bucket->last_decay_generation);
   bucket->last_decay_generation = histogram->generation;
   return;
 }
@@ -122,6 +124,29 @@ double density(struct decaying_histogram *histogram, struct bucket *bucket) {
          (bucket->upper_bound - bucket->lower_bound);
 }
 
+double get_decay(
+    struct decaying_histogram *histogram, int missed_generations) {
+  double decay, base;
+  int exp = missed_generations;
+
+  if (missed_generations < histogram->max_num_buckets) {
+    return histogram->pow_table[missed_generations];
+  } else {
+    decay = 1.0;
+    base = 1.0 - histogram->alpha;
+    while (missed_generations) {
+      if (missed_generations & 1)
+        decay *= base;
+      missed_generations >>= 1;
+      base *= base;
+    }
+    // XXX pow(1.0 - histogram->alpha, 10000000) == 1.0, but
+    // this function returns 0.0.
+    printf("??? %lf\n", decay);
+    return decay;
+  }
+}
+
 void init_decaying_histogram(
     struct decaying_histogram *histogram, int target_buckets, double alpha) {
   double max_total_count, expected_count;
@@ -142,12 +167,17 @@ void init_decaying_histogram(
   for (idx = 0; idx < histogram->max_num_buckets; idx++)
     init_bucket(&histogram->bucket_list[idx], NULL, NULL, alpha);
   histogram->generation = 0;
+
+  histogram->pow_table = (double *)malloc(
+      histogram->max_num_buckets * sizeof(double));
+  for (idx = 0; idx < histogram->max_num_buckets; idx++)
+    histogram->pow_table[idx] = pow(alpha, idx);
+
   return;
 }
 
 double total_count(struct decaying_histogram *histogram) {
-  return (1 - pow(1.0 - histogram->alpha, histogram->generation)) /
-      histogram->alpha;
+  return (1 - get_decay(histogram, histogram->generation)) / histogram->alpha;
 }
 
 void clean_decaying_histogram(struct decaying_histogram *histogram) {
