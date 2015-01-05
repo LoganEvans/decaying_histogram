@@ -13,6 +13,7 @@ Makefile.in
 /aclocal.m4
 /autoconf-[0-9].*
 /autom4te.cache
+/autom4te.cache/*
 /bin/autoheader
 /bin/autoconf
 /bin/autoconf.in
@@ -21,6 +22,7 @@ Makefile.in
 /bin/autoscan
 /bin/autoupdate
 /bin/ifnames
+/build-aux/*
 /build-aux/elisp-comp
 /build-aux/install-sh
 /build-aux/mdate-sh
