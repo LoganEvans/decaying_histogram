@@ -50,11 +50,8 @@ struct bucket {
 void init_bucket(
     struct bucket *to_init, struct bucket *below, struct bucket *above,
     double alpha);
-void add_observation_to_bucket(
-    struct bucket *bucket, double observation, int generation);
 bool is_in_bucket(struct bucket *bucket, double value);
 void recompute_bound(struct bucket *lower, struct bucket *upper);
-void decay(struct bucket *bucket, uint64_t generation);
 
 
 struct decaying_histogram {
@@ -70,6 +67,7 @@ struct decaying_histogram {
 void init_decaying_histogram(
     struct decaying_histogram *histogram, int target_buckets,
     double alpha);
+void decay(struct decaying_histogram *histogram, struct bucket *bucket);
 double total_count(struct decaying_histogram *histogram);
 void clean_decaying_histogram(struct decaying_histogram *histogram);
 int find_bucket_idx(struct decaying_histogram *histogram, double observation);

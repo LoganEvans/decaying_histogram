@@ -46,14 +46,6 @@ void init_bucket(
   to_init->above = above;
 }
 
-void add_observation_to_bucket(
-    struct bucket *bucket, double observation, int generation) {
-  decay(bucket, generation);
-  bucket->mu =
-      (bucket->count * bucket->mu + observation) / (bucket->count + 1);
-  ++bucket->count;
-}
-
 bool is_in_bucket(struct bucket *bucket, double observation) {
   if ((bucket->below == NULL || bucket->lower_bound <= observation) &&
       (bucket->above == NULL || observation < bucket->upper_bound)) {
@@ -102,22 +94,22 @@ void recompute_bound(struct bucket *lower, struct bucket *upper) {
 /*
  * This can efficiently apply the decay for multiple generations.
  */
-void decay(struct bucket *bucket, uint64_t generation) {
-  if (bucket == NULL || bucket->last_decay_generation == generation)
+void decay(struct decaying_histogram * histogram, struct bucket *bucket) {
+  if (bucket == NULL || bucket->last_decay_generation == histogram->generation)
     return;
   bucket->count *= pow(
       1.0 - bucket->alpha,
-      generation - bucket->last_decay_generation);
-  bucket->last_decay_generation = generation;
+      histogram->generation - bucket->last_decay_generation);
+  bucket->last_decay_generation = histogram->generation;
   return;
 }
 
 double density(struct decaying_histogram *histogram, struct bucket *bucket) {
   double left, right;
 
-  decay(bucket->below, histogram->generation);
-  decay(bucket, histogram->generation);
-  decay(bucket->above, histogram->generation);
+  decay(histogram, bucket->below);
+  decay(histogram, bucket);
+  decay(histogram, bucket->above);
   recompute_bound(bucket->below, bucket);
   recompute_bound(bucket, bucket->above);
   if (bucket->upper_bound == bucket->lower_bound || histogram->generation == 0)
@@ -140,7 +132,7 @@ void init_decaying_histogram(
 
   // TODO: What are good thresholds?
   histogram->delete_bucket_threshold = expected_count / 2.0;
-  histogram->split_bucket_threshold = expected_count * 2.0;
+  histogram->split_bucket_threshold = (3.0 * expected_count) / 2.0;
   histogram->alpha = alpha;
   histogram->max_num_buckets =
       ceil(max_total_count / histogram->delete_bucket_threshold);
@@ -188,7 +180,7 @@ void full_refresh(struct decaying_histogram *histogram) {
   struct bucket *bucket;
 
   for (idx = 0; idx < histogram->num_buckets; idx++)
-    decay(&histogram->bucket_list[idx], histogram->generation);
+    decay(histogram, &histogram->bucket_list[idx]);
 
   /*
    * In order to make sure we don't overrun the number of buckets available,
@@ -233,18 +225,20 @@ void add_observation(
   struct bucket *bucket;
 
   ++histogram->generation;
-  full_refresh(histogram); // XXX
   bucket_idx = find_bucket_idx(histogram, observation);
   bucket = &histogram->bucket_list[bucket_idx];
-  add_observation_to_bucket(bucket, observation, histogram->generation);
+  decay(histogram, bucket);
+  bucket->mu =
+      (bucket->count * bucket->mu + observation) / (bucket->count + 1);
+  ++bucket->count;
   if (bucket_idx > 0) {
-    decay(&histogram->bucket_list[bucket_idx - 1], histogram->generation);
+    decay(histogram, &histogram->bucket_list[bucket_idx - 1]);
     recompute_bound(
         &histogram->bucket_list[bucket_idx - 1],
         &histogram->bucket_list[bucket_idx]);
   }
   if (bucket_idx < histogram->num_buckets - 1) {
-    decay(&histogram->bucket_list[bucket_idx + 1], histogram->generation);
+    decay(histogram, &histogram->bucket_list[bucket_idx + 1]);
     recompute_bound(
         &histogram->bucket_list[bucket_idx],
         &histogram->bucket_list[bucket_idx + 1]);
@@ -287,6 +281,7 @@ void delete_bucket(
   if (histogram->num_buckets <= 2)
     return;  // Let's not.
 
+  dying_bucket = &histogram->bucket_list[bucket_idx];
   if (bucket_idx == 0)
     lucky_idx = bucket_idx + 1;
   else if (bucket_idx == histogram->num_buckets - 1)
@@ -296,7 +291,6 @@ void delete_bucket(
   else
     lucky_idx = bucket_idx + 1;
 
-  dying_bucket = &histogram->bucket_list[bucket_idx];
   lucky_bucket = &histogram->bucket_list[lucky_idx];
   lucky_bucket->mu =
       (lucky_bucket->mu * lucky_bucket->count +
@@ -433,7 +427,7 @@ void assert_consistent(struct decaying_histogram *histogram) {
   assert(histogram->num_buckets > 0);
 
   for (idx = 0; idx < histogram->num_buckets; idx++)
-    decay(&histogram->bucket_list[idx], histogram->generation);
+    decay(histogram, &histogram->bucket_list[idx]);
   for (idx = 0; idx < histogram->num_buckets - 1; idx++) {
     bucket = &histogram->bucket_list[idx];
     recompute_bound(bucket, &histogram->bucket_list[idx + 1]);
