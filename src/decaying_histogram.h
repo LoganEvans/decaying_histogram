@@ -47,13 +47,6 @@ struct bucket {
   struct bucket *above;
 };
 
-void init_bucket(
-    struct bucket *to_init, struct bucket *below, struct bucket *above,
-    double alpha);
-bool is_in_bucket(struct bucket *bucket, double value);
-void recompute_bound(struct bucket *lower, struct bucket *upper);
-
-
 struct decaying_histogram {
   double delete_bucket_threshold;
   double split_bucket_threshold;
@@ -68,24 +61,13 @@ struct decaying_histogram {
 void init_decaying_histogram(
     struct decaying_histogram *histogram, int target_buckets,
     double alpha);
-void decay(struct decaying_histogram *histogram, struct bucket *bucket);
-double total_count(struct decaying_histogram *histogram);
 void clean_decaying_histogram(struct decaying_histogram *histogram);
-int find_bucket_idx(struct decaying_histogram *histogram, double observation);
-void full_refresh(struct decaying_histogram *histogram);
 void add_observation(struct decaying_histogram *histogram, double observation);
-void print_histogram(struct decaying_histogram *histogram);
-void delete_bucket(
-    struct decaying_histogram *histogram, int bucket_idx);
-void split_bucket(struct decaying_histogram *histogram, int bucket_idx);
-double density(struct decaying_histogram *histogram, struct bucket *bucket);
-double get_decay(struct decaying_histogram *histogram, int missed_generations);
 double Jaccard_distance(
     struct decaying_histogram *hist0, struct decaying_histogram *hist1);
 double Kolomogorov_Smirnov_statistic(
     struct decaying_histogram *hist0, struct decaying_histogram *hist1);
-
-void assert_consistent(struct decaying_histogram *histogram);
+void print_histogram(struct decaying_histogram *histogram);
 
 #ifdef __cplusplus
 }

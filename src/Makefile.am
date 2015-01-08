@@ -1,5 +1,5 @@
 AM_CXXFLAGS = $(WARN_CXXFLAGS)
-AM_LDFLAGS = -lm
+#AM_LDFLAGS = -lm
 
 bin_PROGRAMS = main
 

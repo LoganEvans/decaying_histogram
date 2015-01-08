@@ -26,11 +26,34 @@
  */
 
 #include <assert.h>
-#include <math.h>
 #include <stdlib.h>
 #include <stdio.h>
 
 #include "decaying_histogram.h"
+
+// The same as ceil(x / y). Using this so that math.h is not a dependency.
+#define CEIL(x, y) ((x) + ((y) - 1)) / (y)
+
+
+static void init_bucket(
+    struct bucket *to_init, struct bucket *below, struct bucket *above,
+    double alpha);
+static bool is_in_bucket(struct bucket *bucket, double value);
+static void recompute_bound(struct bucket *lower, struct bucket *upper);
+static void decay(struct decaying_histogram *histogram, struct bucket *bucket);
+static double total_count(struct decaying_histogram *histogram);
+static int find_bucket_idx(
+    struct decaying_histogram *histogram, double observation);
+static void full_refresh(struct decaying_histogram *histogram);
+static void delete_bucket(
+    struct decaying_histogram *histogram, int bucket_idx);
+static void split_bucket(struct decaying_histogram *histogram, int bucket_idx);
+static double density(
+    struct decaying_histogram *histogram, struct bucket *bucket);
+static double ipow(double coefficient, int power);
+static double get_decay(
+    struct decaying_histogram *histogram, int missed_generations);
+static void assert_consistent(struct decaying_histogram *histogram);
 
 
 void init_bucket(
@@ -99,9 +122,6 @@ void decay(struct decaying_histogram *histogram, struct bucket *bucket) {
     return;
   bucket->count *= get_decay(
       histogram, histogram->generation - bucket->last_decay_generation);
-  //bucket->count *= pow(
-  //    1.0 - bucket->alpha,
-  //    histogram->generation - bucket->last_decay_generation);
   bucket->last_decay_generation = histogram->generation;
   return;
 }
@@ -115,7 +135,7 @@ double density(struct decaying_histogram *histogram, struct bucket *bucket) {
   recompute_bound(bucket->below, bucket);
   recompute_bound(bucket, bucket->above);
   if (bucket->upper_bound == bucket->lower_bound || histogram->generation == 0)
-    return 1.0;  // This is nonsensical, but it graphs better than MAX_DOUBLE.
+    return 0.0;  // This is nonsensical, but it graphs better than MAX_DOUBLE.
   else
     // The total count should approach (1.0 / bucket->alpha),
     // but in the warmup phase, we won't have that many observations
@@ -124,27 +144,27 @@ double density(struct decaying_histogram *histogram, struct bucket *bucket) {
          (bucket->upper_bound - bucket->lower_bound);
 }
 
+double ipow(double coefficient, int power) {
+  double result;
+
+  result = 1.0;
+  while (power) {
+    if (power & 1)
+      result *= coefficient;
+    power >>= 1;
+    coefficient *= coefficient;
+  }
+  return result;
+}
+
 double get_decay(
     struct decaying_histogram *histogram, int missed_generations) {
-  double decay, base;
   int exp = missed_generations;
 
-  if (missed_generations < histogram->max_num_buckets) {
+  if (missed_generations < histogram->max_num_buckets)
     return histogram->pow_table[missed_generations];
-  } else {
-    decay = 1.0;
-    base = 1.0 - histogram->alpha;
-    while (missed_generations) {
-      if (missed_generations & 1)
-        decay *= base;
-      missed_generations >>= 1;
-      base *= base;
-    }
-    // XXX pow(1.0 - histogram->alpha, 10000000) == 1.0, but
-    // this function returns 0.0.
-    printf("??? %lf\n", decay);
-    return decay;
-  }
+  else
+    return ipow(1.0 - histogram->alpha, missed_generations);
 }
 
 void init_decaying_histogram(
@@ -160,7 +180,7 @@ void init_decaying_histogram(
   histogram->split_bucket_threshold = (3.0 * expected_count) / 2.0;
   histogram->alpha = alpha;
   histogram->max_num_buckets =
-      ceil(max_total_count / histogram->delete_bucket_threshold);
+      CEIL(max_total_count, histogram->delete_bucket_threshold);
   histogram->bucket_list = (struct bucket *)malloc(
       sizeof(struct bucket) * histogram->max_num_buckets);
   histogram->num_buckets = 1;
@@ -171,7 +191,7 @@ void init_decaying_histogram(
   histogram->pow_table = (double *)malloc(
       histogram->max_num_buckets * sizeof(double));
   for (idx = 0; idx < histogram->max_num_buckets; idx++)
-    histogram->pow_table[idx] = pow(alpha, idx);
+    histogram->pow_table[idx] = ipow(1.0 - alpha, idx);
 
   return;
 }
