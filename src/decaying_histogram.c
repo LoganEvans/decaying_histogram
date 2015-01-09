@@ -270,7 +270,6 @@ void full_refresh(struct decaying_histogram *histogram) {
   struct bucket *bucket;
 
   pthread_rwlock_wrlock(&histogram->rwlock);
-  assert_consistent(histogram);
   for (idx = 0; idx < histogram->num_buckets; idx++)
     decay(histogram, &histogram->bucket_list[idx], histogram->generation);
 
@@ -307,7 +306,6 @@ void full_refresh(struct decaying_histogram *histogram) {
   for (idx = 0; idx < histogram->num_buckets; idx++)
     recompute_bounds(&histogram->bucket_list[idx]);
 
-  assert_consistent(histogram);
   pthread_rwlock_unlock(&histogram->rwlock);
 }
 
@@ -350,7 +348,6 @@ void add_observation(
   decay(histogram, bucket->below, generation);
   decay(histogram, bucket, generation);
   decay(histogram, bucket->above, generation);
-  assert(is_in_bucket(bucket, observation));
   bucket->mu =
       (bucket->count * bucket->mu + observation) / (bucket->count + 1);
   ++bucket->count;
@@ -460,7 +457,6 @@ void split_bucket(
     // making more than two buckets until we have observed two unique values.
     return;
   }
-  assert(histogram->num_buckets < histogram->max_num_buckets);
 
   // Shift everything right.
   for (idx = histogram->num_buckets; idx > bucket_idx; idx--) {

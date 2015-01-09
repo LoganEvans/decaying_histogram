@@ -36,7 +36,7 @@
 #define NUM_THREADS 100
 #define ALPHA 0.0001
 #define OBSERVATIONS 100000
-#define CYCLES 4ULL * 1024 * 1024 * 1024
+#define CYCLES 8ULL * 1024 * 1024 * 1024
 
 struct decaying_histogram *g_histogram;
 
