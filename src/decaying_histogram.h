@@ -46,6 +46,7 @@ struct bucket {
   uint64_t last_decay_generation;
   struct bucket *below;
   struct bucket *above;
+  pthread_mutexattr_t mutexattr;
   pthread_mutex_t mutex;
 };
 

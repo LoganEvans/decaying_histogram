@@ -27,24 +27,44 @@
 
 
 #include <stdio.h>
+#include <pthread.h>
 #include "decaying_histogram.h"
 #include <random>
 
-int main() {
+#define NUM_BUCKETS 50
+#define NUM_THREADS 2
+#define ALPHA 0.0001
+#define OBSERVATIONS 100000
+
+struct decaying_histogram *g_histogram;
+
+static void *
+thread_func(void *args) {
   std::default_random_engine generator;
   std::normal_distribution<double> normal;
 
-  double alpha = 0.0001;
-  int target_buckets = 50;
-  struct decaying_histogram *histogram = new struct decaying_histogram;
-
-  init_decaying_histogram(histogram, target_buckets, alpha);
-
-  for (int i = 0; i < 1000000; i++) {
-    add_observation(histogram, normal(generator));
+  for (int i = 0; i < OBSERVATIONS; i++) {
+    add_observation(g_histogram, normal(generator));
   }
 
-  print_histogram(histogram);
+  return (void *)NULL;
+}
+
+int main() {
+  pthread_t threads[NUM_BUCKETS];
+
+  g_histogram = new struct decaying_histogram;
+  init_decaying_histogram(g_histogram, NUM_BUCKETS, ALPHA);
+
+  for (int i = 0; i < NUM_THREADS; i++)
+    pthread_create(&threads[i], NULL, (void *(*)(void *))thread_func, NULL);
+
+  for (int i = 0; i < NUM_THREADS; i++)
+    pthread_join(threads[i], NULL);
+
+  print_histogram(g_histogram);
+  clean_decaying_histogram(g_histogram);
+  delete g_histogram;
 
   return 0;
 }
