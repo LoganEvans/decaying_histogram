@@ -26,6 +26,7 @@
  */
 
 
+#include <math.h>
 #include <stdio.h>
 #include <pthread.h>
 #include "decaying_histogram.h"
@@ -35,16 +36,32 @@
 #define NUM_THREADS 100
 #define ALPHA 0.0001
 #define OBSERVATIONS 100000
+#define CYCLES 4ULL * 1024 * 1024 * 1024
 
 struct decaying_histogram *g_histogram;
 
+uint64_t rdtsc()
+{
+  uint32_t hi, lo;
+
+  __asm__ __volatile__ ("rdtsc" : "=a"(lo), "=d"(hi));
+  return (((uint64_t)lo) | (((uint64_t)hi) << 32));
+}
+
+struct thread_func_args {
+  uint64_t stop_timestamp;
+};
+
 static void *
 thread_func(void *args) {
-  std::default_random_engine generator;
-  std::normal_distribution<double> normal;
+  uint64_t last_timestamp, this_timestamp, stop_timestamp;
 
-  for (int i = 0; i < OBSERVATIONS; i++) {
-    add_observation(g_histogram, normal(generator));
+  stop_timestamp = ((struct thread_func_args *)args)->stop_timestamp;
+  last_timestamp = rdtsc();
+  while (last_timestamp < stop_timestamp) {
+    this_timestamp = rdtsc();
+    add_observation(g_histogram, log(this_timestamp - last_timestamp));
+    last_timestamp = this_timestamp;
   }
 
   return (void *)NULL;
@@ -52,12 +69,16 @@ thread_func(void *args) {
 
 int main() {
   pthread_t threads[NUM_THREADS];
+  struct thread_func_args args;
+
+  args.stop_timestamp = rdtsc() + CYCLES;
 
   g_histogram = new struct decaying_histogram;
   init_decaying_histogram(g_histogram, NUM_BUCKETS, ALPHA);
 
   for (int i = 0; i < NUM_THREADS; i++)
-    pthread_create(&threads[i], NULL, (void *(*)(void *))thread_func, NULL);
+    pthread_create(
+      &threads[i], NULL, (void *(*)(void *))thread_func, &args);
 
   for (int i = 0; i < NUM_THREADS; i++)
     pthread_join(threads[i], NULL);

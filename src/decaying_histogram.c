@@ -125,20 +125,12 @@ void recompute_bounds(struct bucket *bucket) {
 void decay(
     struct decaying_histogram *histogram, struct bucket *bucket,
     uint64_t generation) {
-  if (bucket == NULL)
+  if (bucket == NULL || bucket->last_decay_generation == generation)
     return;
-
-  pthread_mutex_lock(&bucket->mutex);
-  if (bucket->last_decay_generation == generation)
-    goto out;
 
   bucket->count *= get_decay(
       histogram, generation - bucket->last_decay_generation);
   bucket->last_decay_generation = generation;
-
- out:
-  pthread_mutex_unlock(&bucket->mutex);
-  return;
 }
 
 double density(
@@ -326,7 +318,6 @@ void add_observation(
   uint64_t generation;
 
   pthread_rwlock_rdlock(&histogram->rwlock);
-  //assert_consistent(histogram);
 
   for (;;) {
     bucket_idx = find_bucket_idx(histogram, observation);
@@ -371,7 +362,6 @@ void add_observation(
   if (bucket->below)
     pthread_mutex_unlock(&bucket->below->mutex);
 
-  //assert_consistent(histogram);
   pthread_rwlock_unlock(&histogram->rwlock);
 
   if (bucket->count < histogram->delete_bucket_threshold)
