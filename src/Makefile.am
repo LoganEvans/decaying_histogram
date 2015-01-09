@@ -1,5 +1,5 @@
 AM_CXXFLAGS = $(WARN_CXXFLAGS)
-#AM_LDFLAGS = -lm
+AM_LDFLAGS = -lpthread
 
 bin_PROGRAMS = main
 

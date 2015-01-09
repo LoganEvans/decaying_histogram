@@ -35,6 +35,7 @@ extern "C" {
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <pthread.h>
 
 struct bucket {
   double alpha;
@@ -45,6 +46,7 @@ struct bucket {
   uint64_t last_decay_generation;
   struct bucket *below;
   struct bucket *above;
+  pthread_mutex_t mutex;
 };
 
 struct decaying_histogram {
@@ -56,13 +58,24 @@ struct decaying_histogram {
   int num_buckets;
   int max_num_buckets;
   double *pow_table;
+  pthread_rwlock_t rwlock;
 };
 
+void init_bucket(
+    struct bucket *to_init, struct bucket *below, struct bucket *above,
+    double alpha);
 void init_decaying_histogram(
     struct decaying_histogram *histogram, int target_buckets,
     double alpha);
 void clean_decaying_histogram(struct decaying_histogram *histogram);
 void add_observation(struct decaying_histogram *histogram, double observation);
+int find_bucket_idx(struct decaying_histogram *histogram, double observation);
+double total_count(struct decaying_histogram *histogram);
+// If lower_bound or upper_bound are non-NULL, this will store the lower_bound
+// and upper bound at the provided address.
+double density(
+    struct decaying_histogram *histogram, struct bucket *bucket,
+    double *lower_bound, double *upper_bound);
 double Jaccard_distance(
     struct decaying_histogram *hist0, struct decaying_histogram *hist1);
 double Kolomogorov_Smirnov_statistic(

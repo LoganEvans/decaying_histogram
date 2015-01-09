@@ -3,7 +3,6 @@ import numpy as np
 import scipy.stats as stats
 import sys
 import time
-import pylab
 from pprint import pprint
 
 def create_bucket_class(alpha_mu=0.001, alpha_count=0.001):
@@ -26,7 +25,7 @@ def create_bucket_class(alpha_mu=0.001, alpha_count=0.001):
 
         def is_in_bucket(self, observation):
             if ((self._lower_bound is None or self._lower_bound <= observation) and
-                (self._upper_bound is None or observation < self._upper_bound)
+                (self._upper_bound is None or observation <= self._upper_bound)
             ):
                 return True
             else:
@@ -186,6 +185,10 @@ def create_rolling_histogram_class(Bucket=create_bucket_class(),
                 cdf.append([bucket.upper_bound(), acc])
             return cdf
 
+        def density(self, observation):
+            bucket_idx = self.find_bucket(observation)
+            return self.bucket_list[bucket_idx].density()
+
         def delete_bucket(self, bucket_idx):
             self.bucket_list[bucket_idx].decay()
             count_below = None
@@ -279,6 +282,19 @@ def create_rolling_histogram_class(Bucket=create_bucket_class(),
                 Bucket.recompute_bound(bucket, bucket.bucket_above)
 
             self.bucket_list.insert(bucket_idx, new_bucket)
+
+        def display(self):
+            from matplotlib import pyplot
+            bins = [bucket.lower_bound() for bucket in self.bucket_list]
+            bins.append(self.bucket_list[-1].upper_bound())
+            bins = np.array(bins)
+            widths = bins[1:] - bins[:-1]
+            freqs = np.array([bucket.density() for bucket in self.bucket_list])
+            heights = freqs.astype(np.float) / widths
+            pyplot.fill_between(
+                    bins.repeat(2)[1:-1], heights.repeat(2),
+                    facecolor='steelblue')
+            pyplot.show()
 
     RollingHistogram.TARGET_BUCKETS = target_buckets
     return RollingHistogram

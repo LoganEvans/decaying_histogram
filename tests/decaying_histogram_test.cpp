@@ -101,7 +101,7 @@ TEST_F(HistogramTest, PositiveDensity) {
   }
 
   for (int idx = 0; idx < histogram_->num_buckets; idx++) {
-    ASSERT_GT(density(histogram_, &histogram_->bucket_list[idx]), 0.0);
+    ASSERT_GT(density(histogram_, &histogram_->bucket_list[idx], NULL, NULL), 0.0);
   }
 }
 
@@ -113,7 +113,7 @@ TEST_F(HistogramTest, DensitySumsToOne) {
 
   acc = 0.0;
   for (int idx = 0; idx < histogram_->num_buckets; idx++) {
-    acc += density(histogram_, &histogram_->bucket_list[idx]) *
+    acc += density(histogram_, &histogram_->bucket_list[idx], NULL, NULL) *
         (histogram_->bucket_list[idx].upper_bound -
          histogram_->bucket_list[idx].lower_bound);
   }

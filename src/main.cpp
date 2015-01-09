@@ -34,13 +34,13 @@ int main() {
   std::default_random_engine generator;
   std::normal_distribution<double> normal;
 
-  double alpha = 0.001;
-  int target_buckets = 100;
+  double alpha = 0.0001;
+  int target_buckets = 50;
   struct decaying_histogram *histogram = new struct decaying_histogram;
 
   init_decaying_histogram(histogram, target_buckets, alpha);
 
-  for (int i = 0; i < 10000000; i++) {
+  for (int i = 0; i < 1000000; i++) {
     add_observation(histogram, normal(generator));
   }
 
