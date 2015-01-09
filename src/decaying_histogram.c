@@ -42,7 +42,6 @@ static void recompute_bounds(struct bucket *bucket);
 static void decay(
     struct decaying_histogram *histogram, struct bucket *bucket,
     uint64_t generation);
-static void full_refresh(struct decaying_histogram *histogram);
 static void delete_bucket(
     struct decaying_histogram *histogram, int bucket_idx);
 static void split_bucket(struct decaying_histogram *histogram, int bucket_idx);
@@ -55,7 +54,6 @@ static void assert_consistent(struct decaying_histogram *histogram);
 void init_bucket(
     struct bucket *to_init, struct bucket *below, struct bucket *above,
     double alpha) {
-  to_init->alpha = alpha;
   to_init->count = 0.0;
   to_init->mu = 0.0;
   to_init->lower_bound = 0.0;
@@ -102,10 +100,12 @@ void recompute_bounds(struct bucket *bucket) {
   }
 
   if (bucket->below == NULL && bucket->above == NULL) {
-    // Only one bin exists. Since we don't have any other way to compute
-    // the bound, we'll insert the only number that we have.
-    bucket->lower_bound = bucket->mu;
-    bucket->upper_bound = bucket->mu;
+    // Only one bin exists. This is a bit of a fiction, but in order to
+    // make the histogram's area sum to 1.0, we'll just center a square
+    // at mu. This also depends on the density function returning 1.0 when
+    // only one bucket exists.
+    bucket->lower_bound = bucket->mu - 0.5;
+    bucket->upper_bound = bucket->mu + 0.5;
   } else if (bucket->below == NULL) {
     // While the bound is effectively infinate, we need a sensible bound to
     // compute bucket heights. Here, we'll assume that the observations in
@@ -135,7 +135,7 @@ void decay(
 
 double density(
     struct decaying_histogram *histogram, struct bucket *bucket,
-    double *lower_bound, double *upper_bound) {
+    double *lower_bound_output, double *upper_bound_output) {
   double lower, upper;
   uint64_t generation;
   double retval;
@@ -147,7 +147,6 @@ double density(
     pthread_mutex_lock(&bucket->above->mutex);
 
   pthread_mutex_lock(&histogram->generation_mutex);
-  ++histogram->generation;
   generation = histogram->generation;
   pthread_mutex_unlock(&histogram->generation_mutex);
 
@@ -155,18 +154,24 @@ double density(
   decay(histogram, bucket, generation);
   decay(histogram, bucket->above, generation);
   recompute_bounds(bucket);
-  if (lower_bound != NULL)
-    *lower_bound = bucket->lower_bound;
-  if (upper_bound != NULL)
-    *upper_bound = bucket->upper_bound;
+  if (lower_bound_output != NULL)
+    *lower_bound_output = bucket->lower_bound;
+  if (upper_bound_output != NULL)
+    *upper_bound_output = bucket->upper_bound;
 
-  if (bucket->upper_bound == bucket->lower_bound ||
+  if (histogram->num_buckets == 1 ||
       histogram->generation == 0) {
-    retval = 0.0;  // This is nonsensical, but it graphs better than MAX_DOUBLE.
+    // This is nonsensical, but we'll assume the bucket has width 1.0 (see
+    // recompute_bounds()) so that the total area is 1.0.
+    retval = 1.0;
   } else {
-    // The total count should approach (1.0 / bucket->alpha),
+    // The total count should approach (1.0 / alpha),
     // but in the warmup phase, we won't have that many observations
     // recorded.
+    //printf("??? %lf %lf %lf %lf %d\n",
+    //  bucket->lower_bound, bucket->upper_bound,
+    //  bucket->count, total_count(histogram),
+    //  histogram->num_buckets);
     retval = (bucket->count / total_count(histogram)) /
              (bucket->upper_bound - bucket->lower_bound);
   }
@@ -236,7 +241,8 @@ void init_decaying_histogram(
 }
 
 double total_count(struct decaying_histogram *histogram) {
-  return (1 - get_decay(histogram, histogram->generation)) / histogram->alpha;
+  return (1 - get_decay(histogram, histogram->generation)) /
+         histogram->alpha;
 }
 
 void clean_decaying_histogram(struct decaying_histogram *histogram) {
@@ -311,9 +317,10 @@ void full_refresh(struct decaying_histogram *histogram) {
 
 void add_observation(
     struct decaying_histogram *histogram, double observation) {
-  int bucket_idx;
+  int bucket_idx, idx;
   struct bucket *bucket;
   uint64_t generation;
+  double acc;
 
   pthread_rwlock_rdlock(&histogram->rwlock);
 
@@ -351,6 +358,7 @@ void add_observation(
   bucket->mu =
       (bucket->count * bucket->mu + observation) / (bucket->count + 1);
   ++bucket->count;
+
   recompute_bounds(bucket);
 
   if (bucket->above)

@@ -46,6 +46,7 @@ class HistogramTest : public testing::Test {
     histogram_ = new struct decaying_histogram;
     init_decaying_histogram(histogram_, target_buckets_, alpha_);
     g_generator.seed(0);
+
   }
 
   virtual void TearDown() {
@@ -117,8 +118,7 @@ TEST_F(HistogramTest, DensitySumsToOne) {
         (histogram_->bucket_list[idx].upper_bound -
          histogram_->bucket_list[idx].lower_bound);
   }
-  EXPECT_NEAR(1.0, acc, 1e-9);
-  print_histogram(histogram_);
+  EXPECT_NEAR(1.0, acc, 0.00004);
 }
 
 TEST_F(HistogramTest, TotalCount) {
@@ -132,7 +132,19 @@ TEST_F(HistogramTest, TotalCount) {
   }
 
   EXPECT_LT(0, histogram_->num_buckets);
-  EXPECT_NEAR(count, total_count(histogram_), 1e-9);
+  EXPECT_NEAR(count, total_count(histogram_), 0.00004);
+}
+
+TEST_F(HistogramTest, BucketCountsSumToTotalCount) {
+  double count;
+
+  count = 0.0;
+  full_refresh(histogram_);
+  for (int idx = 0; idx < histogram_->num_buckets; idx++) {
+    count += histogram_->bucket_list[idx].count;
+  }
+
+  EXPECT_NEAR(count, total_count(histogram_), 0.00004);
 }
 
 TEST(HistogramBucketTest, BucketInit) {
@@ -141,7 +153,6 @@ TEST(HistogramBucketTest, BucketInit) {
     init_bucket(&buckets[1], &buckets[0], &buckets[2], 0.01);
     init_bucket(&buckets[2], NULL, &buckets[2], 0.01);
     for (int idx = 0; idx < 3; idx++) {
-        EXPECT_EQ(0.01, buckets[idx].alpha);
         EXPECT_EQ(0.0, buckets[idx].count);
         EXPECT_EQ(0.0, buckets[idx].mu);
         EXPECT_EQ(0.0, buckets[idx].lower_bound);

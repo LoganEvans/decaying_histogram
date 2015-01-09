@@ -38,7 +38,6 @@ extern "C" {
 #include <pthread.h>
 
 struct bucket {
-  double alpha;
   double count;
   double mu;
   double lower_bound;
@@ -63,6 +62,9 @@ struct decaying_histogram {
   pthread_mutex_t generation_mutex;
 };
 
+#define ABS_DIFF(x, y) (((x) - (y)) > 0 ? (x) - (y) : (y) - (x))
+#define THRESH 0.00004
+
 void init_bucket(
     struct bucket *to_init, struct bucket *below, struct bucket *above,
     double alpha);
@@ -77,12 +79,13 @@ double total_count(struct decaying_histogram *histogram);
 // and upper bound at the provided address.
 double density(
     struct decaying_histogram *histogram, struct bucket *bucket,
-    double *lower_bound, double *upper_bound);
+    double *lower_bound_output, double *upper_bound_output);
 double Jaccard_distance(
     struct decaying_histogram *hist0, struct decaying_histogram *hist1);
 double Kolomogorov_Smirnov_statistic(
     struct decaying_histogram *hist0, struct decaying_histogram *hist1);
 void print_histogram(struct decaying_histogram *histogram);
+void full_refresh(struct decaying_histogram *histogram);
 
 #ifdef __cplusplus
 }
