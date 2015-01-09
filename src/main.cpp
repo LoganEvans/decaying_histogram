@@ -32,7 +32,7 @@
 #include <random>
 
 #define NUM_BUCKETS 50
-#define NUM_THREADS 2
+#define NUM_THREADS 100
 #define ALPHA 0.0001
 #define OBSERVATIONS 100000
 
@@ -51,7 +51,7 @@ thread_func(void *args) {
 }
 
 int main() {
-  pthread_t threads[NUM_BUCKETS];
+  pthread_t threads[NUM_THREADS];
 
   g_histogram = new struct decaying_histogram;
   init_decaying_histogram(g_histogram, NUM_BUCKETS, ALPHA);

@@ -60,6 +60,7 @@ struct decaying_histogram {
   int max_num_buckets;
   double *pow_table;
   pthread_rwlock_t rwlock;
+  pthread_mutex_t generation_mutex;
 };
 
 void init_bucket(
