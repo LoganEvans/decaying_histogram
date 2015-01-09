@@ -36,7 +36,7 @@
 
 
 static bool is_in_bucket(struct bucket *bucket, double value);
-static void recompute_bound(struct bucket *lower, struct bucket *upper);
+static void recompute_bounds(struct bucket *bucket);
 static void decay(struct decaying_histogram *histogram, struct bucket *bucket);
 static void full_refresh(struct decaying_histogram *histogram);
 static void delete_bucket(
@@ -72,39 +72,54 @@ bool is_in_bucket(struct bucket *bucket, double observation) {
 }
 
 /* Both buckets should be decayed before this is called. */
-void recompute_bound(struct bucket *lower, struct bucket *upper) {
-  double bound;
+void recompute_bounds(struct bucket *bucket) {
+  if (bucket == NULL)
+    return;
+
   // TODO: This might need to check against DBL_MAX.
 
-  if (lower == NULL && upper->above == NULL) {
+  // Always grab locks from left to right to avoid deadlock.
+  if (bucket->below)
+    pthread_mutex_lock(&bucket->below->mutex);
+  pthread_mutex_lock(&bucket->mutex);
+  if (bucket->above)
+    pthread_mutex_lock(&bucket->above->mutex);
+
+  if (bucket->below != NULL) {
+    bucket->lower_bound = (bucket->mu * bucket->count +
+                           bucket->below->mu * bucket->below->count) /
+                          (bucket->count + bucket->below->count);
+    bucket->below->upper_bound = bucket->lower_bound;
+  }
+
+  if (bucket->above != NULL) {
+    bucket->upper_bound = (bucket->mu * bucket->count +
+                           bucket->above->mu * bucket->above->count) /
+                          (bucket->count + bucket->above->count);
+    bucket->above->lower_bound = bucket->upper_bound;
+  }
+
+  if (bucket->below == NULL && bucket->above == NULL) {
     // Only one bin exists. Since we don't have any other way to compute
     // the bound, we'll insert the only number that we have.
-    upper->lower_bound = upper->mu;
-  } else if (lower == NULL) {
+    bucket->lower_bound = bucket->mu;
+    bucket->upper_bound = bucket->mu;
+  } else if (bucket->below == NULL) {
     // While the bound is effectively infinate, we need a sensible bound to
     // compute bucket heights. Here, we'll assume that the observations in
     // the bucket are uniform, so mu should be at the very center of the
     // bucket.
-    // We can't assume that the bounds are accurate here, so we'll
-    // recompute them.
-    bound = (upper->mu * upper->count +
-         upper->above->mu * upper->above->count) /
-        (upper->count + upper->above->count);
-    upper->lower_bound = upper->mu - (bound - upper->mu);
-  } else if (upper == NULL && lower->below == NULL) {
-    lower->upper_bound = lower->mu;
-  } else if (upper == NULL) {
-    bound = (lower->below->mu * lower->below->count +
-         lower->mu * lower->count) /
-        (lower->below->count + lower->count);
-    lower->upper_bound = lower->mu + (lower->mu - bound);
-  } else {
-    // Both buckets exist.
-    bound = ((lower->mu * lower->count + upper->mu * upper->count) /
-         (lower->count + upper->count));
-    lower->upper_bound = bound;
-    upper->lower_bound = bound;
+    bucket->lower_bound = bucket->mu - (bucket->upper_bound - bucket->mu);
+  } else if (bucket->above == NULL) {
+    bucket->upper_bound = bucket->mu + (bucket->mu - bucket->lower_bound);
   }
+
+  // Release the locks in reverse order from when they were acquired.
+  if (bucket->above)
+    pthread_mutex_unlock(&bucket->above->mutex);
+  pthread_mutex_unlock(&bucket->mutex);
+  if (bucket->below)
+    pthread_mutex_unlock(&bucket->below->mutex);
 }
 
 /*
@@ -135,22 +150,22 @@ double density(
   decay(histogram, bucket->below);
   decay(histogram, bucket);
   decay(histogram, bucket->above);
-  recompute_bound(bucket->below, bucket);
-  lower = bucket->lower_bound;
+  recompute_bounds(bucket);
   if (lower_bound != NULL)
-    *lower_bound = lower;
-  recompute_bound(bucket, bucket->above);
-  upper = bucket->upper_bound;
+    *lower_bound = bucket->lower_bound;
   if (upper_bound != NULL)
-    *upper_bound = upper;
-  if (upper == lower || histogram->generation == 0)
+    *upper_bound = bucket->upper_bound;
+
+  if (bucket->upper_bound == bucket->lower_bound ||
+      histogram->generation == 0) {
     return 0.0;  // This is nonsensical, but it graphs better than MAX_DOUBLE.
-  else
+  } else {
     // The total count should approach (1.0 / bucket->alpha),
     // but in the warmup phase, we won't have that many observations
     // recorded.
     return (bucket->count / total_count(histogram)) /
-         (upper - lower);
+         (bucket->upper_bound - bucket->lower_bound);
+  }
 }
 
 double ipow(double coefficient, int power) {
@@ -271,13 +286,9 @@ void full_refresh(struct decaying_histogram *histogram) {
     }
   } while (do_another_round);
 
-  for (idx = 0; idx < histogram->num_buckets - 1; idx++) {
-    recompute_bound(
-        &histogram->bucket_list[idx], &histogram->bucket_list[idx + 1]);
-  }
+  for (idx = 0; idx < histogram->num_buckets; idx++)
+    recompute_bounds(&histogram->bucket_list[idx]);
 
-  recompute_bound(NULL, &histogram->bucket_list[0]);
-  recompute_bound(&histogram->bucket_list[histogram->num_buckets - 1], NULL);
   pthread_rwlock_unlock(&histogram->rwlock);
 }
 
@@ -295,18 +306,7 @@ void add_observation(
   bucket->mu =
       (bucket->count * bucket->mu + observation) / (bucket->count + 1);
   ++bucket->count;
-  if (bucket_idx > 0) {
-    decay(histogram, &histogram->bucket_list[bucket_idx - 1]);
-    recompute_bound(
-        &histogram->bucket_list[bucket_idx - 1],
-        &histogram->bucket_list[bucket_idx]);
-  }
-  if (bucket_idx < histogram->num_buckets - 1) {
-    decay(histogram, &histogram->bucket_list[bucket_idx + 1]);
-    recompute_bound(
-        &histogram->bucket_list[bucket_idx],
-        &histogram->bucket_list[bucket_idx + 1]);
-  }
+  recompute_bounds(bucket);
 
   pthread_rwlock_unlock(&histogram->rwlock);
 
@@ -392,16 +392,7 @@ void delete_bucket(
   histogram->bucket_list[histogram->num_buckets].below = NULL;
   histogram->bucket_list[histogram->num_buckets - 1].above = NULL;
 
-  if (bucket_idx > 0) {
-    recompute_bound(
-        &histogram->bucket_list[bucket_idx - 1],
-        &histogram->bucket_list[bucket_idx]);
-  }
-  if (bucket_idx + 1 < histogram->num_buckets) {
-    recompute_bound(
-        &histogram->bucket_list[bucket_idx],
-        &histogram->bucket_list[bucket_idx + 1]);
-  }
+  recompute_bounds(&histogram->bucket_list[bucket_idx]);
 
   return;
 }
@@ -476,9 +467,8 @@ void split_bucket(
 
   right->last_decay_generation = left->last_decay_generation;
 
-  recompute_bound(left->below, left);
-  recompute_bound(left, right);
-  recompute_bound(right, right->above);
+  recompute_bounds(left);
+  recompute_bounds(right);
 
   return;
 }
@@ -504,16 +494,13 @@ void assert_consistent(struct decaying_histogram *histogram) {
 
   for (idx = 0; idx < histogram->num_buckets; idx++)
     decay(histogram, &histogram->bucket_list[idx]);
-  for (idx = 0; idx < histogram->num_buckets - 1; idx++) {
+  for (idx = 0; idx < histogram->num_buckets; idx++) {
     bucket = &histogram->bucket_list[idx];
-    recompute_bound(bucket, &histogram->bucket_list[idx + 1]);
+    recompute_bounds(bucket);
     assert(
         bucket->lower_bound <= bucket->mu &&
         bucket->mu <= bucket->upper_bound);
   }
-
-  recompute_bound(NULL, &histogram->bucket_list[0]);
-  recompute_bound(&histogram->bucket_list[histogram->num_buckets - 1], NULL);
 
   for (idx = 1; idx < histogram->num_buckets - 1; idx++) {
     assert(
