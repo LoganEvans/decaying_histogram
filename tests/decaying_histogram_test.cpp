@@ -73,6 +73,7 @@ TEST_F(HistogramTest, FindBucket) {
     histogram_->bucket_list[idx].above = &histogram_->bucket_list[idx + 1];
   }
   histogram_->bucket_list[0].below = NULL;
+  histogram_->bucket_list[num_buckets - 1].below = &histogram_->bucket_list[num_buckets - 2];
   histogram_->bucket_list[num_buckets - 1].above = NULL;
 
   for (int idx = 0; idx < num_buckets; idx++) {

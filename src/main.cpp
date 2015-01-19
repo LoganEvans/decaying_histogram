@@ -32,7 +32,7 @@
 #include "decaying_histogram.h"
 #include <random>
 
-#define NUM_BUCKETS 30
+#define NUM_BUCKETS 100
 #define NUM_THREADS 50
 #define ALPHA 0.000001
 #define CYCLES 16ULL * 1024 * 1024 * 1024

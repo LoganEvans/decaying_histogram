@@ -83,8 +83,6 @@ bool is_in_bucket(struct bucket *bucket, fixedpt observation) {
 
 /* Both buckets should be decayed before this is called. */
 void recompute_bounds(struct bucket *bucket) {
-  fixedpt candidate_bound;
-
   if (bucket == NULL)
     return;
 
@@ -94,11 +92,6 @@ void recompute_bounds(struct bucket *bucket) {
   // should be held (or else we have the wrlock);
 
   if (bucket->below != NULL) {
-    if (bucket->below->mu > bucket->mu) {
-      printf("bucket->below->mu(%s) > bucket->mu(%s)\n",
-          fixedpt_cstr(bucket->below->mu, -2), fixedpt_cstr(bucket->mu, -2));
-      assert(false);
-    }
     if (bucket->mu == bucket->below->mu) {
       bucket->lower_bound = bucket->mu;
     } else {
@@ -111,11 +104,6 @@ void recompute_bounds(struct bucket *bucket) {
   }
 
   if (bucket->above != NULL) {
-    if (bucket->mu > bucket->above->mu) {
-      printf("bucket->mu(%s) > bucket->above->mu(%s)\n",
-          fixedpt_cstr(bucket->mu, -2), fixedpt_cstr(bucket->above->mu, -2));
-      assert(false);
-    }
     if (bucket->mu == bucket->above->mu) {
       bucket->upper_bound = bucket->mu;
     } else {
@@ -143,17 +131,6 @@ void recompute_bounds(struct bucket *bucket) {
   } else if (bucket->above == NULL) {
     bucket->upper_bound = bucket->mu + (bucket->mu - bucket->lower_bound);
   }
-
-  if (bucket->lower_bound > bucket->upper_bound) {
-    printf("FAIL. lower_bound > upper_bound\n");
-    printf("lower_bound: %s mu: %s upper_bound: %s diff: %s\n",
-        fixedpt_cstr(bucket->lower_bound, -2),
-        fixedpt_cstr(bucket->mu, -2),
-        fixedpt_cstr(bucket->upper_bound, -2),
-        fixedpt_cstr(bucket->upper_bound - bucket->lower_bound, -2)
-        );
-    assert(false);
-  }
 }
 
 /*
@@ -176,7 +153,6 @@ void decay(
 fixedpt density(
     struct decaying_histogram *histogram, struct bucket *bucket,
     fixedpt *lower_bound_output, fixedpt *upper_bound_output) {
-  fixedpt lower, upper;
   uint64_t generation;
   fixedpt retval;
 
@@ -281,7 +257,7 @@ int find_bucket_idx(
 
   low = 0;
   high = histogram->num_buckets - 1;
-  while (low < high) {
+  while (low <= high) {
     mid = (low + high) / 2;
     bucket = &histogram->bucket_list[mid];
     if (is_in_bucket(bucket, observation))
@@ -291,6 +267,7 @@ int find_bucket_idx(
     else
       high = mid;
   }
+  assert(false);
   return low;
 }
 
@@ -299,7 +276,6 @@ void full_refresh(struct decaying_histogram *histogram) {
   bool do_another_round, finished_deletes;
   struct bucket *bucket;
 
-  pthread_rwlock_rdlock(&histogram->rwlock);
   for (idx = 0; idx < histogram->num_buckets; idx++)
     decay(histogram, &histogram->bucket_list[idx], histogram->generation);
 
@@ -335,13 +311,11 @@ void full_refresh(struct decaying_histogram *histogram) {
 
   for (idx = 0; idx < histogram->num_buckets; idx++)
     recompute_bounds(&histogram->bucket_list[idx]);
-
-  pthread_rwlock_unlock(&histogram->rwlock);
 }
 
 void add_observation(
     struct decaying_histogram *histogram, double observation) {
-  int bucket_idx, idx;
+  int bucket_idx;
   struct bucket *bucket;
   uint64_t generation;
   fixedpt fixedpt_observation;
@@ -350,20 +324,17 @@ void add_observation(
 
   pthread_rwlock_rdlock(&histogram->rwlock);
 
-  for (;;) {
-    bucket_idx = find_bucket_idx(histogram, fixedpt_observation);
-    bucket = &histogram->bucket_list[bucket_idx];
+  bucket_idx = find_bucket_idx(histogram, fixedpt_observation);
+  bucket = &histogram->bucket_list[bucket_idx];
 
-    // We'll lock everything from left to right to avoid deadlocks.
-    if (bucket->below)
-      pthread_mutex_lock(&bucket->below->mutex);
-    pthread_mutex_lock(&bucket->mutex);
-    if (bucket->above)
-      pthread_mutex_lock(&bucket->above->mutex);
+  // We'll lock everything from left to right to avoid deadlocks.
+  if (bucket->below)
+    pthread_mutex_lock(&bucket->below->mutex);
+  pthread_mutex_lock(&bucket->mutex);
+  if (bucket->above)
+    pthread_mutex_lock(&bucket->above->mutex);
 
-    if (is_in_bucket(bucket, fixedpt_observation))
-      break;
-
+  while (!is_in_bucket(bucket, fixedpt_observation)) {
     // It is possible that the bucket boundaries could shift between when
     // the bucket is identified and when we lock it. If we fail, try again.
     if (bucket->above)
@@ -371,6 +342,15 @@ void add_observation(
     pthread_mutex_unlock(&bucket->mutex);
     if (bucket->below)
       pthread_mutex_unlock(&bucket->below->mutex);
+
+    bucket_idx = find_bucket_idx(histogram, fixedpt_observation);
+    bucket = &histogram->bucket_list[bucket_idx];
+
+    if (bucket->below)
+      pthread_mutex_lock(&bucket->below->mutex);
+    pthread_mutex_lock(&bucket->mutex);
+    if (bucket->above)
+      pthread_mutex_lock(&bucket->above->mutex);
   }
 
   pthread_mutex_lock(&histogram->generation_mutex);
@@ -382,20 +362,10 @@ void add_observation(
   decay(histogram, bucket, generation);
   decay(histogram, bucket->above, generation);
 
-  bucket->mu =
-      fixedpt_xdiv(
-        fixedpt_xmul(bucket->count, bucket->mu) + fixedpt_observation,
-        (bucket->count + fixedpt_rconst(1.0)));
-  if ((bucket->below && bucket->lower_bound > bucket->mu) ||
-      (bucket->above && bucket->mu > bucket->upper_bound)) {
-    printf("FAIL... lower_bound: %s mu: %s upper_bound: %s\n",
-      fixedpt_cstr(bucket->lower_bound, -2),
-      fixedpt_cstr(bucket->mu, -2),
-      fixedpt_cstr(bucket->upper_bound, -2));
-      assert(false);
-  }
+  bucket->mu = fixedpt_xdiv(
+      fixedpt_xmul(bucket->count, bucket->mu) + fixedpt_observation,
+      (bucket->count + fixedpt_rconst(1.0)));
   bucket->count = bucket->count + fixedpt_rconst(1.0);
-
   recompute_bounds(bucket);
 
   if (bucket->above)
@@ -406,17 +376,19 @@ void add_observation(
 
   pthread_rwlock_unlock(&histogram->rwlock);
 
-  if (bucket->count < histogram->delete_bucket_threshold)
+  if (bucket->count < histogram->delete_bucket_threshold ||
+      bucket->count > histogram->split_bucket_threshold) {
+    pthread_rwlock_wrlock(&histogram->rwlock);
     full_refresh(histogram);
-  if (bucket->count > histogram->split_bucket_threshold)
-    full_refresh(histogram);
+    pthread_rwlock_unlock(&histogram->rwlock);
+  }
 }
 
 void print_histogram(struct decaying_histogram *histogram) {
   int idx;
   fixedpt bound;
 
-  pthread_rwlock_rdlock(&histogram->rwlock);
+  pthread_rwlock_wrlock(&histogram->rwlock);
   full_refresh(histogram);
 
   printf("{\"densities\": [");
@@ -543,9 +515,6 @@ void split_bucket(
     // as we observe a non-mu entry, the split between the buckets
     // will be more sensical. However, we will need to take care to not split
     // a bucket again until this happens.
-
-    //left->count = fixedpt_xdiv(left->count, fixedpt_rconst(2.0));
-    //right->count = left->count;
     right->mu = left->mu;
   } else {
     diameter = left->upper_bound - left->lower_bound;
@@ -568,7 +537,7 @@ fixedpt Jaccard_distance(
   return 0.0;
 }
 
-fixedpt Kolomogorov_Smirnov_statistic(
+fixedpt Kolmogorov_Smirnov_statistic(
     struct decaying_histogram *hist0, struct decaying_histogram *hist1) {
   assert(false);
   return 0.0;
@@ -576,27 +545,12 @@ fixedpt Kolomogorov_Smirnov_statistic(
 
 void assert_consistent(struct decaying_histogram *histogram) {
   int idx;
-  struct bucket *bucket;
 
   assert(histogram->num_buckets <= histogram->max_num_buckets);
   assert(histogram->num_buckets > 0);
 
   for (idx = 0; idx < histogram->num_buckets; idx++)
     decay(histogram, &histogram->bucket_list[idx], histogram->generation);
-
-//for (idx = 0; idx < histogram->num_buckets; idx++) {
-//  bucket = &histogram->bucket_list[idx];
-//  recompute_bounds(bucket);
-//  assert(
-//      bucket->lower_bound <= bucket->mu &&
-//      bucket->mu <= bucket->upper_bound);
-//  assert(bucket->mu != NAN);
-//  assert(bucket->mu != INFINITY);
-//  assert(bucket->lower_bound != NAN);
-//  assert(bucket->lower_bound != INFINITY);
-//  assert(bucket->upper_bound != NAN);
-//  assert(bucket->upper_bound != INFINITY);
-//}
 
   for (idx = 1; idx < histogram->num_buckets; idx++) {
     if (histogram->bucket_list[idx - 1].mu > histogram->bucket_list[idx].mu) {

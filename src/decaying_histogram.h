@@ -85,7 +85,7 @@ fixedpt density(
     fixedpt *lower_bound_output, fixedpt *upper_bound_output);
 fixedpt Jaccard_distance(
     struct decaying_histogram *hist0, struct decaying_histogram *hist1);
-fixedpt Kolomogorov_Smirnov_statistic(
+fixedpt Kolmogorov_Smirnov_statistic(
     struct decaying_histogram *hist0, struct decaying_histogram *hist1);
 void print_histogram(struct decaying_histogram *histogram);
 void full_refresh(struct decaying_histogram *histogram);
