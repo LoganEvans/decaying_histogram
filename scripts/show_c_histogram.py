@@ -1,14 +1,13 @@
 from matplotlib import pyplot
 import numpy as np
 import sys
-import json
 
-data = json.loads(sys.argv[1])
-densities = np.array(data['densities'])
-boundaries = np.array(data['boundaries'])
-widths = boundaries[1:] - boundaries[:-1]
-heights = densities.astype(np.float)/widths
+freqs, bins = sys.argv[1].splitlines()
+freqs = np.array(eval(freqs))
+bins = np.array(eval(bins))
+widths = bins[1:] - bins[:-1]
+heights = freqs.astype(np.float)/widths
 pyplot.fill_between(
-        boundaries.repeat(2)[1:-1], heights.repeat(2), facecolor='steelblue')
+        bins.repeat(2)[1:-1], heights.repeat(2), facecolor='steelblue')
 pyplot.show()
 

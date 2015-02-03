@@ -37,15 +37,11 @@ extern "C" {
 #include <stdbool.h>
 #include <pthread.h>
 
-#define FIXEDPT_BITS 64
-#define FIXEDPT_WBITS 33
-#include "fixedptc.h"
-
 struct bucket {
-  fixedpt count;
-  fixedpt mu;
-  fixedpt lower_bound;
-  fixedpt upper_bound;
+  double count;
+  double mu;
+  double lower_bound;
+  double upper_bound;
   uint64_t last_decay_generation;
   struct bucket *below;
   struct bucket *above;
@@ -54,13 +50,14 @@ struct bucket {
 };
 
 struct decaying_histogram {
-  fixedpt delete_bucket_threshold;
-  fixedpt split_bucket_threshold;
-  fixedpt alpha;
+  double delete_bucket_threshold;
+  double split_bucket_threshold;
+  double alpha;
   uint64_t generation;
   struct bucket *bucket_list;
   int num_buckets;
   int max_num_buckets;
+  double *pow_table;
   pthread_rwlock_t rwlock;
   pthread_mutex_t generation_mutex;
 };
@@ -70,22 +67,22 @@ struct decaying_histogram {
 
 void init_bucket(
     struct bucket *to_init, struct bucket *below, struct bucket *above,
-    fixedpt alpha);
+    double alpha);
 void init_decaying_histogram(
     struct decaying_histogram *histogram, int target_buckets,
     double alpha);
 void clean_decaying_histogram(struct decaying_histogram *histogram);
 void add_observation(struct decaying_histogram *histogram, double observation);
-int find_bucket_idx(struct decaying_histogram *histogram, fixedpt observation);
-fixedpt total_count(struct decaying_histogram *histogram);
+int find_bucket_idx(struct decaying_histogram *histogram, double observation);
+double total_count(struct decaying_histogram *histogram);
 // If lower_bound or upper_bound are non-NULL, this will store the lower_bound
 // and upper bound at the provided address.
-fixedpt density(
+double density(
     struct decaying_histogram *histogram, struct bucket *bucket,
-    fixedpt *lower_bound_output, fixedpt *upper_bound_output);
-fixedpt Jaccard_distance(
+    double *lower_bound_output, double *upper_bound_output);
+double Jaccard_distance(
     struct decaying_histogram *hist0, struct decaying_histogram *hist1);
-fixedpt Kolmogorov_Smirnov_statistic(
+double Kolomogorov_Smirnov_statistic(
     struct decaying_histogram *hist0, struct decaying_histogram *hist1);
 void print_histogram(struct decaying_histogram *histogram);
 void full_refresh(struct decaying_histogram *histogram);
