@@ -45,8 +45,9 @@ struct bucket {
   uint64_t last_decay_generation;
   struct bucket *below;
   struct bucket *above;
-  pthread_mutexattr_t mutexattr;
   pthread_mutex_t mutex;
+  pthread_mutexattr_t mutexattr;
+  char __padding[4];
 };
 
 struct decaying_histogram {
@@ -56,7 +57,7 @@ struct decaying_histogram {
   uint64_t generation;
   struct bucket *bucket_list;
   int num_buckets;
-  int max_num_buckets;
+  unsigned int max_num_buckets;
   double *pow_table;
   pthread_rwlock_t rwlock;
   pthread_mutex_t generation_mutex;
@@ -66,8 +67,7 @@ struct decaying_histogram {
 #define THRESH 0.00004
 
 void init_bucket(
-    struct bucket *to_init, struct bucket *below, struct bucket *above,
-    double alpha);
+    struct bucket *to_init, struct bucket *below, struct bucket *above);
 void init_decaying_histogram(
     struct decaying_histogram *histogram, int target_buckets,
     double alpha);

@@ -37,9 +37,9 @@
 #define ALPHA 0.0000001
 //#define CYCLES 16ULL * 1024 * 1024 * 1024
 
-struct decaying_histogram *g_histogram;
+static struct decaying_histogram *g_histogram;
 
-uint64_t rdtsc()
+static uint64_t rdtsc()
 {
   uint32_t hi, lo;
 

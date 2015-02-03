@@ -34,7 +34,7 @@
 #include "decaying_histogram.h"
 
 // The same as ceil(x / y). Using this so that math.h is not a dependency.
-#define CEIL(x, y) ((x) + ((y) - 1)) / (y)
+#define CEIL(x, y) ((int)((x) + ((int)(y) - 1)) / (int)(y))
 
 
 static bool is_in_bucket(struct bucket *bucket, double value);
@@ -45,15 +45,14 @@ static void decay(
 static void delete_bucket(
     struct decaying_histogram *histogram, int bucket_idx);
 static void split_bucket(struct decaying_histogram *histogram, int bucket_idx);
-static double ipow(double coefficient, int power);
+static double ipow(double coefficient, uint64_t power);
 static double get_decay(
-    struct decaying_histogram *histogram, int missed_generations);
-static void assert_consistent(struct decaying_histogram *histogram);
+    struct decaying_histogram *histogram, uint64_t missed_generations);
+//static void assert_consistent(struct decaying_histogram *histogram);
 
 
 void init_bucket(
-    struct bucket *to_init, struct bucket *below, struct bucket *above,
-    double alpha) {
+    struct bucket *to_init, struct bucket *below, struct bucket *above) {
   to_init->count = 0.0;
   to_init->mu = 0.0;
   to_init->lower_bound = 0.0;
@@ -136,7 +135,6 @@ void decay(
 double density(
     struct decaying_histogram *histogram, struct bucket *bucket,
     double *lower_bound_output, double *upper_bound_output) {
-  double lower, upper;
   uint64_t generation;
   double retval;
 
@@ -185,7 +183,7 @@ double density(
   return retval;
 }
 
-double ipow(double coefficient, int power) {
+double ipow(double coefficient, uint64_t power) {
   double result;
 
   result = 1.0;
@@ -199,9 +197,7 @@ double ipow(double coefficient, int power) {
 }
 
 double get_decay(
-    struct decaying_histogram *histogram, int missed_generations) {
-  int exp = missed_generations;
-
+    struct decaying_histogram *histogram, uint64_t missed_generations) {
   if (missed_generations < histogram->max_num_buckets)
     return histogram->pow_table[missed_generations];
   else
@@ -211,7 +207,7 @@ double get_decay(
 void init_decaying_histogram(
     struct decaying_histogram *histogram, int target_buckets, double alpha) {
   double max_total_count, expected_count;
-  int idx;
+  uint64_t idx;
 
   max_total_count = 1.0 / alpha;
   expected_count = 1.0 / (alpha * target_buckets);
@@ -221,12 +217,12 @@ void init_decaying_histogram(
   histogram->split_bucket_threshold = (3.0 * expected_count) / 2.0;
   histogram->alpha = alpha;
   histogram->max_num_buckets =
-      CEIL(max_total_count, histogram->delete_bucket_threshold);
+      (unsigned int)CEIL(max_total_count, histogram->delete_bucket_threshold);
   histogram->bucket_list = (struct bucket *)malloc(
       sizeof(struct bucket) * histogram->max_num_buckets);
   histogram->num_buckets = 1;
   for (idx = 0; idx < histogram->max_num_buckets; idx++)
-    init_bucket(&histogram->bucket_list[idx], NULL, NULL, alpha);
+    init_bucket(&histogram->bucket_list[idx], NULL, NULL);
   histogram->generation = 0;
 
   histogram->pow_table = (double *)malloc(
@@ -317,10 +313,9 @@ void full_refresh(struct decaying_histogram *histogram) {
 
 void add_observation(
     struct decaying_histogram *histogram, double observation) {
-  int bucket_idx, idx;
+  int bucket_idx;
   struct bucket *bucket;
   uint64_t generation;
-  double acc;
 
   pthread_rwlock_rdlock(&histogram->rwlock);
 
@@ -496,7 +491,7 @@ void split_bucket(
   else
     far_right = NULL;
 
-  init_bucket(right, left, far_right, histogram->alpha);
+  init_bucket(right, left, far_right);
   left->above = right;
   left->count /= 2.0;
   right->count = left->count;
@@ -527,16 +522,19 @@ void split_bucket(
 
 double Jaccard_distance(
     struct decaying_histogram *hist0, struct decaying_histogram *hist1) {
+  assert(hist0 && hist1);
   assert(false);
   return 0.0;
 }
 
 double Kolomogorov_Smirnov_statistic(
     struct decaying_histogram *hist0, struct decaying_histogram *hist1) {
+  assert(hist0 && hist1);
   assert(false);
   return 0.0;
 }
 
+#if 0
 void assert_consistent(struct decaying_histogram *histogram) {
   int idx;
   struct bucket *bucket;
@@ -599,4 +597,5 @@ void assert_consistent(struct decaying_histogram *histogram) {
         histogram->bucket_list[histogram->num_buckets - 1].lower_bound);
   }
 }
+#endif
 
