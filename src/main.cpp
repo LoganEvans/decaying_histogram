@@ -33,9 +33,9 @@
 #include <random>
 
 #define NUM_BUCKETS 20
-#define NUM_THREADS 2
-#define ALPHA 0.000001
-#define CYCLES 16ULL * 1024 * 1024 * 1024
+#define NUM_THREADS 1
+#define ALPHA 0.001
+#define CYCLES 1ULL * 512 * 1024 * 1024
 #define DHIST_MP_FLAG DHIST_MULTI_THREADED
 
 static struct decaying_histogram *g_histogram;
@@ -86,16 +86,16 @@ int main() {
 
   //while (1) {
   //  nanosleep(&tim , &tim2);
-  //  print_histogram(g_histogram);
+  //  print_histogram(g_histogram, true);
   //  fflush(stdout);
   //}
 
   for (int i = 0; i < NUM_THREADS; i++)
     pthread_join(threads[i], NULL);
 
-  print_histogram(g_histogram);
-  clean_decaying_histogram(g_histogram);
-  delete g_histogram;
+  print_histogram(g_histogram, true, "Test", "log_2(insertion time)");
+  //clean_decaying_histogram(g_histogram);
+  //delete g_histogram;
 
   return 0;
 }

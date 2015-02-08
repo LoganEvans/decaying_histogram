@@ -43,7 +43,7 @@ extern "C" {
 struct bucket {
   double count;
   double mu;
-  uint64_t last_decay_generation;
+  uint64_t update_generation;
   struct bucket *below;
   struct bucket *above;
   pthread_mutex_t *boundary_mtx;  /* lower boundary */
@@ -82,17 +82,20 @@ void add_observation(
  */
 struct bucket * find_bucket(
     struct decaying_histogram *histogram, double observation, int mp_flag);
-double total_count(struct decaying_histogram *histogram);
+double total_count(struct decaying_histogram *histogram, uint64_t generation);
 // If lower_bound or upper_bound are non-NULL, this will store the lower_bound
 // and upper bound at the provided address.
 double density(
     struct decaying_histogram *histogram, struct bucket *bucket,
+    uint64_t generation,
     double *lower_bound_output, double *upper_bound_output);
 double Jaccard_distance(
     struct decaying_histogram *hist0, struct decaying_histogram *hist1);
 double Kolomogorov_Smirnov_statistic(
     struct decaying_histogram *hist0, struct decaying_histogram *hist1);
-void print_histogram(struct decaying_histogram *histogram);
+void print_histogram(
+    struct decaying_histogram *histogram, bool estimate_ok,
+    const char *title, const char *xaxis);
 void full_refresh(struct decaying_histogram *histogram);
 
 #ifdef __cplusplus
