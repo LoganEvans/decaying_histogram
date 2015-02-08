@@ -33,9 +33,9 @@
 #include <random>
 
 #define NUM_BUCKETS 20
-#define NUM_THREADS 1
-#define ALPHA 0.001
-#define CYCLES 1ULL * 512 * 1024 * 1024
+#define NUM_THREADS 2
+#define ALPHA 0.00001
+#define CYCLES 16ULL * 1024 * 1024 * 1024
 #define DHIST_MP_FLAG DHIST_MULTI_THREADED
 
 static struct decaying_histogram *g_histogram;
@@ -58,8 +58,8 @@ thread_func(void *args) {
 
   stop_timestamp = ((struct thread_func_args *)args)->stop_timestamp;
   last_timestamp = rdtsc();
-  while (last_timestamp < stop_timestamp) {
-  //while (1) {
+  //while (last_timestamp < stop_timestamp) {
+  while (1) {
     this_timestamp = rdtsc();
     add_observation(g_histogram, log2(this_timestamp - last_timestamp), DHIST_MP_FLAG);
     last_timestamp = this_timestamp;
@@ -84,11 +84,11 @@ int main() {
     pthread_create(
       &threads[i], NULL, (void *(*)(void *))thread_func, &args);
 
-  //while (1) {
-  //  nanosleep(&tim , &tim2);
-  //  print_histogram(g_histogram, true);
-  //  fflush(stdout);
-  //}
+  while (1) {
+    nanosleep(&tim , &tim2);
+    print_histogram(g_histogram, true, "Test", "log_2(insertion time)");
+    fflush(stdout);
+  }
 
   for (int i = 0; i < NUM_THREADS; i++)
     pthread_join(threads[i], NULL);

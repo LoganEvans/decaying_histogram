@@ -16,6 +16,10 @@ def update(num):
         update.history.pop()
 
     pyplot.cla()
+    if "title" in new_data:
+        pyplot.title(new_data["title"])
+    if "xlabel" in new_data:
+        pyplot.xlabel(new_data["xlabel"])
     for idx, data in enumerate(reversed(update.history)):
         densities = np.array(data['densities'])
         boundaries = np.array(data['boundaries'])
