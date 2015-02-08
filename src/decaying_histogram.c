@@ -34,34 +34,41 @@
 #include "decaying_histogram.h"
 
 // The same as ceil(x / y). Using this so that math.h is not a dependency.
+#ifndef CEIL
 #define CEIL(x, y) ((int)((x) + ((int)(y) - 1)) / (int)(y))
+#endif
 
 
 static bool is_target_bucket_boundary(
     struct bucket *bucket, double observation);
-static void decay(
-    struct decaying_histogram *histogram, struct bucket *bucket,
-    uint64_t generation);
 static void delete_bucket(
-    struct decaying_histogram *histogram, int bucket_idx);
-static void split_bucket(struct decaying_histogram *histogram, int bucket_idx);
+    struct decaying_histogram *histogram, uint32_t bucket_idx);
+static void split_bucket(
+    struct decaying_histogram *histogram, uint32_t bucket_idx);
 static double ipow(double coefficient, uint64_t power);
 static double get_decay(
     struct decaying_histogram *histogram, uint64_t missed_generations);
 static double compute_bound(
     struct decaying_histogram *histogram,
     struct bucket *left, struct bucket *right);
-static double compute_mu(struct bucket *bucket, uint64_t generation);
+static double compute_count(
+    struct decaying_histogram *histogram, struct bucket *bucket,
+    uint64_t generation);
+static bool perform_add(
+    struct decaying_histogram *histogram, struct bucket *bucket,
+    double observation, bool recheck_left_boundary,
+    bool recheck_right_boundary, int mp_flag);
+static bool find_bucket_helper(
+    struct bucket *bucket, double observation, int mp_flag);
 //static void assert_consistent(struct decaying_histogram *histogram);
 
 
-void init_bucket(
-    struct bucket *to_init, struct bucket *below, struct bucket *above) {
+void init_bucket(struct bucket *to_init) {
   to_init->count = 0.0;
   to_init->mu = 0.0;
   to_init->update_generation = 0;
-  to_init->below = below;
-  to_init->above = above;
+  to_init->below = NULL;
+  to_init->above = NULL;
 
   to_init->boundary_mtx =
     (pthread_mutex_t *)malloc(sizeof(pthread_mutex_t));
@@ -106,6 +113,10 @@ void decay(
   bucket->update_generation = generation;
 }
 
+/*
+ * If generation == 0, this will provide the density estimate using the last
+ * update generation as to compute the count.
+ */
 double density(
     struct decaying_histogram *histogram, struct bucket *bucket,
     uint64_t generation,
@@ -147,7 +158,7 @@ double ipow(double coefficient, uint64_t power) {
 
 double get_decay(
     struct decaying_histogram *histogram, uint64_t missed_generations) {
-  if (missed_generations < histogram->max_num_buckets)
+  if (missed_generations < (uint32_t)histogram->max_num_buckets)
     return histogram->pow_table[missed_generations];
   else
     return ipow(1.0 - histogram->alpha, missed_generations);
@@ -204,20 +215,26 @@ bool perform_add(
   if (recheck_left_boundary) {
     boundary = compute_bound(histogram, bucket->below, bucket);
     if (observation < boundary) {
-      pthread_mutex_unlock(&histogram->generation_mutex);
+      if (mp_flag & DHIST_MULTI_THREADED)
+        pthread_mutex_unlock(&histogram->generation_mutex);
       return false;
     }
   } else if (recheck_right_boundary) {
     boundary = compute_bound(histogram, bucket, bucket->above);
     if (boundary < observation) {
-      pthread_mutex_unlock(&histogram->generation_mutex);
+      if (mp_flag & DHIST_MULTI_THREADED)
+        pthread_mutex_unlock(&histogram->generation_mutex);
       return false;
     }
   }
 
-  pthread_mutex_lock(&histogram->generation_mutex);
-  update_generation = ++histogram->generation;
-  pthread_mutex_unlock(&histogram->generation_mutex);
+  if (mp_flag & DHIST_MULTI_THREADED) {
+    pthread_mutex_lock(&histogram->generation_mutex);
+    update_generation = ++histogram->generation;
+    pthread_mutex_unlock(&histogram->generation_mutex);
+  } else {
+    update_generation = ++histogram->generation;
+  }
 
   bucket->count = 1.0 + compute_count(
       histogram, bucket, update_generation);
@@ -237,16 +254,16 @@ void init_decaying_histogram(
   expected_count = 1.0 / (alpha * target_buckets);
 
   // TODO: What are good thresholds?
-  histogram->delete_bucket_threshold = expected_count / 4.0;
-  histogram->split_bucket_threshold = (7.0 * expected_count) / 4.0;
+  histogram->delete_bucket_threshold = expected_count * (1.0 / 2.0);
+  histogram->split_bucket_threshold = expected_count * (3.0 / 2.0);
   histogram->alpha = alpha;
-  histogram->max_num_buckets =
-      (unsigned int)CEIL(max_total_count, histogram->delete_bucket_threshold);
+  histogram->max_num_buckets = 2 *
+      (uint32_t)CEIL(max_total_count, histogram->delete_bucket_threshold);
   histogram->bucket_list = (struct bucket *)malloc(
       sizeof(struct bucket) * histogram->max_num_buckets);
   histogram->num_buckets = 1;
   for (idx = 0; idx < histogram->max_num_buckets; idx++)
-    init_bucket(&histogram->bucket_list[idx], NULL, NULL);
+    init_bucket(&histogram->bucket_list[idx]);
   histogram->generation = 0;
 
   histogram->pow_table = (double *)malloc(
@@ -289,8 +306,9 @@ bool find_bucket_helper(
 
 struct bucket * find_bucket(
     struct decaying_histogram *histogram, double observation, int mp_flag) {
-  int low, mid, high;
+  uint32_t low, mid, high;
   struct bucket *bucket;
+  int tries = 0;
 
   while (histogram->num_buckets == 1) {
     bucket = &histogram->bucket_list[0];
@@ -317,17 +335,20 @@ struct bucket * find_bucket(
     } else {
       high = mid;
     }
+    tries += 1;
   }
   assert(false);
   return NULL;
 }
 
-void full_refresh(struct decaying_histogram *histogram) {
-  int idx;
+void full_refresh(struct decaying_histogram *histogram, int mp_flag) {
+  uint32_t idx;
   bool do_another_round, finished_deletes;
   struct bucket *bucket;
 
-  pthread_rwlock_wrlock(&histogram->rwlock);
+  if (mp_flag & DHIST_MULTI_THREADED)
+    pthread_rwlock_wrlock(&histogram->rwlock);
+
   for (idx = 0; idx < histogram->num_buckets; idx++)
     decay(histogram, &histogram->bucket_list[idx], histogram->generation);
 
@@ -358,17 +379,18 @@ void full_refresh(struct decaying_histogram *histogram) {
     }
   } while (do_another_round);
 
-  pthread_rwlock_unlock(&histogram->rwlock);
+  if (mp_flag & DHIST_MULTI_THREADED)
+    pthread_rwlock_unlock(&histogram->rwlock);
 }
 
 void add_observation(
     struct decaying_histogram *histogram, double observation, int mp_flag) {
   struct bucket *bucket;
-  uint64_t generation;
   bool add_succeeded;
-  double count_left, count_right, boundary;
+  double boundary;
 
-  pthread_rwlock_rdlock(&histogram->rwlock);
+  if (mp_flag & DHIST_MULTI_THREADED)
+    pthread_rwlock_rdlock(&histogram->rwlock);
 
   do {
     bucket = find_bucket(histogram, observation, mp_flag);
@@ -416,51 +438,70 @@ void add_observation(
           histogram, bucket, observation, false, false, mp_flag);
     }
 
-    pthread_mutex_unlock(bucket->boundary_mtx);
+    if (mp_flag & DHIST_MULTI_THREADED)
+      pthread_mutex_unlock(bucket->boundary_mtx);
   } while (!add_succeeded);
 
-  pthread_rwlock_unlock(&histogram->rwlock);
+  if (mp_flag & DHIST_MULTI_THREADED)
+      pthread_rwlock_unlock(&histogram->rwlock);
+
   if (bucket->count < histogram->delete_bucket_threshold)
-    full_refresh(histogram);
+    full_refresh(histogram, mp_flag);
   if (bucket->count > histogram->split_bucket_threshold)
-    full_refresh(histogram);
+    full_refresh(histogram, mp_flag);
 }
 
 void print_histogram(
     struct decaying_histogram *histogram, bool estimate_ok,
-    const char *title, const char *xlabel) {
-  int idx, num_buckets;
+    const char *title, const char *xlabel, int mp_flag) {
+  uint32_t idx, num_buckets;
   uint64_t generation;
   double *boundaries, *densities;
   struct bucket *left, *right;
 
-  if (!estimate_ok)
+  if (mp_flag & DHIST_SINGLE_THREADED) {
+    /* pass */
+  } else if (!estimate_ok) {
     pthread_rwlock_wrlock(&histogram->rwlock);
-  else
+  } else {
     pthread_rwlock_rdlock(&histogram->rwlock);
+  }
 
   num_buckets = histogram->num_buckets;
   densities = (double *)malloc(sizeof(double) * num_buckets);
   boundaries = (double *)malloc(sizeof(double) * (num_buckets + 1));
 
-  pthread_mutex_lock(&histogram->generation_mutex);
-  generation = histogram->generation;
-  pthread_mutex_unlock(&histogram->generation_mutex);
+  if (mp_flag & DHIST_MULTI_THREADED) {
+    pthread_mutex_lock(&histogram->generation_mutex);
+    generation = histogram->generation;
+    pthread_mutex_unlock(&histogram->generation_mutex);
+  } else {
+    generation = histogram->generation;
+  }
 
   right = NULL;
   for (idx = 0; idx < num_buckets; idx++) {
     left = right;
     right = &histogram->bucket_list[idx];
-    pthread_mutex_lock(right->boundary_mtx);
-    densities[idx] = density(
-        histogram, right, generation, &boundaries[idx], NULL);
-    pthread_mutex_unlock(right->boundary_mtx);
+    if (mp_flag & DHIST_MULTI_THREADED) {
+      pthread_mutex_lock(right->boundary_mtx);
+      densities[idx] = density(
+          histogram, right, generation, &boundaries[idx], NULL);
+      pthread_mutex_unlock(right->boundary_mtx);
+    } else {
+      densities[idx] = density(
+          histogram, right, generation, &boundaries[idx], NULL);
+    }
   }
-  pthread_mutex_lock(right->boundary_mtx);
-  boundaries[idx] = compute_bound(histogram, right, NULL);
-  pthread_mutex_unlock(right->boundary_mtx);
 
-  pthread_rwlock_unlock(&histogram->rwlock);
+  if (mp_flag & DHIST_MULTI_THREADED) {
+    pthread_mutex_lock(right->boundary_mtx);
+    boundaries[idx] = compute_bound(histogram, right, NULL);
+    pthread_mutex_unlock(right->boundary_mtx);
+    pthread_rwlock_unlock(&histogram->rwlock);
+  } else {
+    boundaries[idx] = compute_bound(histogram, right, NULL);
+  }
 
   printf("{");
   if (title)
@@ -490,8 +531,8 @@ void print_histogram(
  * All buckets must be decayed before calling this.
  */
 void delete_bucket(
-    struct decaying_histogram *histogram, int bucket_idx) {
-  int lucky_idx, idx;
+    struct decaying_histogram *histogram, uint32_t bucket_idx) {
+  uint32_t lucky_idx, idx;
   struct bucket *lucky_bucket, *dying_bucket;
 
   if (histogram->num_buckets <= 2)
@@ -529,8 +570,8 @@ void delete_bucket(
 }
 
 void split_bucket(
-    struct decaying_histogram *histogram, int bucket_idx) {
-  int idx;
+    struct decaying_histogram *histogram, uint32_t bucket_idx) {
+  uint32_t idx;
   double lower_bound, upper_bound, diameter, median;
   struct bucket *left, *right, *far_right;
 

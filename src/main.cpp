@@ -32,11 +32,13 @@
 #include "decaying_histogram.h"
 #include <random>
 
-#define NUM_BUCKETS 20
-#define NUM_THREADS 2
-#define ALPHA 0.00001
+#define NUM_BUCKETS 100
+#define NUM_THREADS 20
+#define ALPHA 0.000001
 #define CYCLES 16ULL * 1024 * 1024 * 1024
-#define DHIST_MP_FLAG DHIST_MULTI_THREADED
+#define DHIST_MP_FLAG (NUM_THREADS > 1 ? DHIST_MULTI_THREADED : DHIST_SINGLE_THREADED)
+
+#define ANIMATE 0
 
 static struct decaying_histogram *g_histogram;
 
@@ -58,10 +60,14 @@ thread_func(void *args) {
 
   stop_timestamp = ((struct thread_func_args *)args)->stop_timestamp;
   last_timestamp = rdtsc();
-  //while (last_timestamp < stop_timestamp) {
+#if ANIMATE
   while (1) {
+#else
+  while (last_timestamp < stop_timestamp) {
+#endif
     this_timestamp = rdtsc();
-    add_observation(g_histogram, log2(this_timestamp - last_timestamp), DHIST_MP_FLAG);
+    add_observation(
+        g_histogram, log2(this_timestamp - last_timestamp), DHIST_MP_FLAG);
     last_timestamp = this_timestamp;
   }
 
@@ -84,16 +90,20 @@ int main() {
     pthread_create(
       &threads[i], NULL, (void *(*)(void *))thread_func, &args);
 
+#if ANIMATE
   while (1) {
     nanosleep(&tim , &tim2);
-    print_histogram(g_histogram, true, "Test", "log_2(insertion time)");
+    print_histogram(g_histogram, true, "Test", "log_2(insertion time)",
+        DHIST_MP_FLAG);
     fflush(stdout);
   }
+#endif
 
   for (int i = 0; i < NUM_THREADS; i++)
     pthread_join(threads[i], NULL);
 
-  print_histogram(g_histogram, true, "Test", "log_2(insertion time)");
+  print_histogram(
+      g_histogram, true, "Test", "log_2(insertion time)", DHIST_MP_FLAG);
   //clean_decaying_histogram(g_histogram);
   //delete g_histogram;
 

@@ -61,33 +61,44 @@ class HistogramTest : public testing::Test {
 
 TEST_F(HistogramTest, FindBucket) {
   int num_buckets = histogram_->max_num_buckets;
-  histogram_->num_buckets = num_buckets;
-  for (int idx = 0; idx < num_buckets; idx++) {
-    histogram_->bucket_list[idx].lower_bound = idx + 0.5;
-    histogram_->bucket_list[idx].upper_bound = idx + 1.5;
-    histogram_->bucket_list[idx].count = 1.0;
-    histogram_->bucket_list[idx].mu = idx;
-  }
-  for (int idx = 1; idx < num_buckets - 1; idx++) {
-    histogram_->bucket_list[idx].below = &histogram_->bucket_list[idx - 1];
-    histogram_->bucket_list[idx].above = &histogram_->bucket_list[idx + 1];
-  }
-  histogram_->bucket_list[0].below = NULL;
-  histogram_->bucket_list[num_buckets - 1].above = NULL;
+  double dens, lower_bound, upper_bound;
 
-  for (int idx = 0; idx < num_buckets; idx++) {
-    EXPECT_EQ(idx, find_bucket_idx(histogram_, idx + 1.0));
+  for (num_buckets = 1; num_buckets <= histogram_->max_num_buckets;
+      num_buckets++) {
+    histogram_->num_buckets = num_buckets;
+    histogram_->generation = 9001;
+    for (int idx = 0; idx < num_buckets; idx++) {
+      histogram_->bucket_list[idx].count = 1.0 / (histogram_->alpha * num_buckets);
+      histogram_->bucket_list[idx].mu = idx;
+      histogram_->bucket_list[idx].update_generation = 9001;
+    }
+    for (int idx = 1; idx < num_buckets - 1; idx++) {
+      histogram_->bucket_list[idx].below = &histogram_->bucket_list[idx - 1];
+      histogram_->bucket_list[idx].above = &histogram_->bucket_list[idx + 1];
+    }
+    histogram_->bucket_list[0].below = NULL;
+    histogram_->bucket_list[num_buckets - 1].above = NULL;
+
+    if (num_buckets == 2) {
+      histogram_->bucket_list[0].above = &histogram_->bucket_list[1];
+      histogram_->bucket_list[1].below = &histogram_->bucket_list[0];
+    }
+
+    for (int idx = 0; idx < num_buckets; idx++) {
+      ASSERT_EQ(
+          &histogram_->bucket_list[idx],
+          find_bucket(histogram_, idx - 0.25, DHIST_SINGLE_THREADED))
+          << "idx: " << idx << endl;
+    }
   }
 
   // If we only have one bucket, everything goes into that bucket.
   histogram_->num_buckets = 1;
   histogram_->bucket_list[0].below = NULL;
   histogram_->bucket_list[0].above = NULL;
-  EXPECT_EQ(0, find_bucket_idx(histogram_, -1000));
-}
-
-TEST_F(HistogramTest, Bootstrap) {
-  EXPECT_EQ(0, 0);
+  EXPECT_EQ(
+      &histogram_->bucket_list[0],
+      find_bucket(histogram_, -1000, DHIST_SINGLE_THREADED));
 }
 
 TEST_F(HistogramTest, PositiveDensity) {
@@ -95,28 +106,35 @@ TEST_F(HistogramTest, PositiveDensity) {
 
   for (int idx = 0; idx < 1000; idx++) {
     observation = g_normal(g_generator);
-    add_observation(histogram_, observation);
+    add_observation(histogram_, observation, DHIST_SINGLE_THREADED);
     //if (histogram_->num_buckets > 1)
     //  FAIL() << histogram_->bucket_list[0].lower_bound << " | " << histogram_->bucket_list[0].upper_bound
     //         << " ; " << histogram_->bucket_list[1].lower_bound << " | " << histogram_->bucket_list[1].upper_bound << endl;
   }
 
   for (int idx = 0; idx < histogram_->num_buckets; idx++) {
-    ASSERT_GT(density(histogram_, &histogram_->bucket_list[idx], NULL, NULL), 0.0);
+    ASSERT_GT(
+        density(histogram_, &histogram_->bucket_list[idx], 0, NULL, NULL),
+        0.0);
   }
 }
 
 TEST_F(HistogramTest, DensitySumsToOne) {
-  double observation, acc;
+  double observation, acc, dens, lower_bound, upper_bound;
 
   for (int idx = 0; idx < 1000000; idx++)
-    add_observation(histogram_, g_normal(g_generator));
+    add_observation(histogram_, g_normal(g_generator), DHIST_SINGLE_THREADED);
+
+  for (int idx = 0; idx < histogram_->num_buckets; idx++) {
+    decay(histogram_, &histogram_->bucket_list[idx], histogram_->generation);
+  }
 
   acc = 0.0;
   for (int idx = 0; idx < histogram_->num_buckets; idx++) {
-    acc += density(histogram_, &histogram_->bucket_list[idx], NULL, NULL) *
-        (histogram_->bucket_list[idx].upper_bound -
-         histogram_->bucket_list[idx].lower_bound);
+    dens = density(
+        histogram_, &histogram_->bucket_list[idx], 0,
+        &lower_bound, &upper_bound);
+    acc += dens * (upper_bound - lower_bound);
   }
   EXPECT_NEAR(1.0, acc, 0.00004);
 }
@@ -128,42 +146,22 @@ TEST_F(HistogramTest, TotalCount) {
   for (int idx = 0; idx < 1000; idx++) {
     count *= (1.0 - alpha_);
     count += 1.0;
-    add_observation(histogram_, g_normal(g_generator));
+    add_observation(histogram_, g_normal(g_generator), DHIST_SINGLE_THREADED);
   }
 
   EXPECT_LT(0, histogram_->num_buckets);
-  EXPECT_NEAR(count, total_count(histogram_), 0.00004);
+  EXPECT_NEAR(count, total_count(histogram_, histogram_->generation), 0.00004);
 }
 
 TEST_F(HistogramTest, BucketCountsSumToTotalCount) {
   double count;
 
   count = 0.0;
-  full_refresh(histogram_);
+  full_refresh(histogram_, DHIST_SINGLE_THREADED);
   for (int idx = 0; idx < histogram_->num_buckets; idx++) {
     count += histogram_->bucket_list[idx].count;
   }
 
-  EXPECT_NEAR(count, total_count(histogram_), 0.00004);
-}
-
-TEST(HistogramBucketTest, BucketInit) {
-    struct bucket buckets[3];
-    init_bucket(&buckets[0], NULL, NULL, 0.01);
-    init_bucket(&buckets[1], &buckets[0], &buckets[2], 0.01);
-    init_bucket(&buckets[2], NULL, &buckets[2], 0.01);
-    for (int idx = 0; idx < 3; idx++) {
-        EXPECT_EQ(0.0, buckets[idx].count);
-        EXPECT_EQ(0.0, buckets[idx].mu);
-        EXPECT_EQ(0.0, buckets[idx].lower_bound);
-        EXPECT_EQ(0.0, buckets[idx].upper_bound);
-        EXPECT_EQ(0, buckets[idx].last_decay_generation);
-    }
-    EXPECT_EQ(NULL, buckets[0].below);
-    EXPECT_EQ(NULL, buckets[0].above);
-    EXPECT_EQ(&buckets[0], buckets[1].below);
-    EXPECT_EQ(&buckets[2], buckets[1].above);
-    EXPECT_EQ(NULL, buckets[2].below);
-    EXPECT_EQ(&buckets[2], buckets[2].above);
+  EXPECT_NEAR(count, total_count(histogram_, histogram_->generation), 0.00004);
 }
 

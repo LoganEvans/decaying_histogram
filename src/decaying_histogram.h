@@ -55,8 +55,8 @@ struct decaying_histogram {
   double alpha;
   uint64_t generation;
   struct bucket *bucket_list;
-  int num_buckets;
-  unsigned int max_num_buckets;
+  uint32_t num_buckets;
+  uint32_t max_num_buckets;
   double *pow_table;
   pthread_rwlock_t rwlock;
   pthread_mutex_t generation_mutex;
@@ -64,8 +64,7 @@ struct decaying_histogram {
 
 #define ABS_DIFF(x, y) (((x) - (y)) > 0 ? (x) - (y) : (y) - (x))
 
-void init_bucket(
-    struct bucket *to_init, struct bucket *below, struct bucket *above);
+void init_bucket(struct bucket *to_init);
 void init_decaying_histogram(
     struct decaying_histogram *histogram, int target_buckets,
     double alpha);
@@ -83,20 +82,21 @@ void add_observation(
 struct bucket * find_bucket(
     struct decaying_histogram *histogram, double observation, int mp_flag);
 double total_count(struct decaying_histogram *histogram, uint64_t generation);
-// If lower_bound or upper_bound are non-NULL, this will store the lower_bound
-// and upper bound at the provided address.
 double density(
     struct decaying_histogram *histogram, struct bucket *bucket,
     uint64_t generation,
     double *lower_bound_output, double *upper_bound_output);
+void decay(
+    struct decaying_histogram *histogram, struct bucket *bucket,
+    uint64_t generation);
 double Jaccard_distance(
     struct decaying_histogram *hist0, struct decaying_histogram *hist1);
 double Kolomogorov_Smirnov_statistic(
     struct decaying_histogram *hist0, struct decaying_histogram *hist1);
 void print_histogram(
     struct decaying_histogram *histogram, bool estimate_ok,
-    const char *title, const char *xaxis);
-void full_refresh(struct decaying_histogram *histogram);
+    const char *title, const char *xaxis, int mp_flag);
+void full_refresh(struct decaying_histogram *histogram, int mp_flag);
 
 #ifdef __cplusplus
 }
