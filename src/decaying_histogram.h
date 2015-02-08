@@ -37,17 +37,16 @@ extern "C" {
 #include <stdbool.h>
 #include <pthread.h>
 
+#define DHIST_SINGLE_THREADED (1 << 0)
+#define DHIST_MULTI_THREADED  (1 << 1)
+
 struct bucket {
   double count;
   double mu;
-  double lower_bound;
-  double upper_bound;
   uint64_t last_decay_generation;
   struct bucket *below;
   struct bucket *above;
-  pthread_mutex_t mutex;
-  pthread_mutexattr_t mutexattr;
-  char __padding[4];
+  pthread_mutex_t *boundary_mtx;  /* lower boundary */
 };
 
 struct decaying_histogram {
@@ -64,7 +63,6 @@ struct decaying_histogram {
 };
 
 #define ABS_DIFF(x, y) (((x) - (y)) > 0 ? (x) - (y) : (y) - (x))
-#define THRESH 0.00004
 
 void init_bucket(
     struct bucket *to_init, struct bucket *below, struct bucket *above);
@@ -72,8 +70,18 @@ void init_decaying_histogram(
     struct decaying_histogram *histogram, int target_buckets,
     double alpha);
 void clean_decaying_histogram(struct decaying_histogram *histogram);
-void add_observation(struct decaying_histogram *histogram, double observation);
-int find_bucket_idx(struct decaying_histogram *histogram, double observation);
+void add_observation(
+    struct decaying_histogram *histogram, double observation, int mp_flag);
+/*
+ * This returns the bucket with the greatest mu less than observation (which is
+ * not necessarily the bucket where observation will be inserted) unless the
+ * target bucket is the leftmost bucket, in which case observation may be less
+ * than bucket->mu.
+ * If mp_flag & DHIST_MULTI_THREADED, the boundary_mtx for this bucket and its
+ * right hand neighbor will be locked.
+ */
+struct bucket * find_bucket(
+    struct decaying_histogram *histogram, double observation, int mp_flag);
 double total_count(struct decaying_histogram *histogram);
 // If lower_bound or upper_bound are non-NULL, this will store the lower_bound
 // and upper bound at the provided address.
