@@ -39,7 +39,7 @@
 #define CYCLES (1ULL * 1024 * 1024 * 1024)
 #define FRAMES_PER_SECOND 5
 #define PERMITTED_BYTES (1ULL * 1024 * 1024 * 1024)
-#define BYTES_PER_MALLOC (128ULL * 1024)
+#define BYTES_PER_MALLOC (1024ULL * 1024)
 #define MAX_NUM_THREADS 200
 
 static struct decaying_histogram *g_histogram;
