@@ -42,7 +42,7 @@ extern "C" {
 
 struct bucket {
   double count;
-  double mu;
+  volatile double mu;
   uint64_t update_generation;
   struct bucket *below;
   struct bucket *above;
@@ -97,6 +97,7 @@ void print_histogram(
     struct decaying_histogram *histogram, bool estimate_ok,
     const char *title, const char *xaxis, int mp_flag);
 void full_refresh(struct decaying_histogram *histogram, int mp_flag);
+bool is_target_boundary(struct bucket *bucket, double observation);
 
 #ifdef __cplusplus
 }

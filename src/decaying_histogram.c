@@ -39,8 +39,6 @@
 #endif
 
 
-static bool is_target_bucket_boundary(
-    struct bucket *bucket, double observation);
 static void delete_bucket(
     struct decaying_histogram *histogram, uint32_t bucket_idx);
 static void split_bucket(
@@ -79,7 +77,7 @@ void init_bucket(struct bucket *to_init) {
  * Returns true if the observation is between the lower bucket mu and the
  * current bucket mu.
  */
-bool is_target_bucket_boundary(struct bucket *bucket, double observation) {
+bool is_target_boundary(struct bucket *bucket, double observation) {
   if (bucket->below == NULL && observation <= bucket->mu) {
     return true;
   } else if (bucket->below == NULL && bucket->above == NULL) {
@@ -88,7 +86,9 @@ bool is_target_bucket_boundary(struct bucket *bucket, double observation) {
     return false;
   } else if (observation < bucket->below->mu) {
     return false;
-  } else if (bucket->below->mu <= observation && observation <= bucket->mu) {
+  } else if (bucket->below->mu <= observation && observation < bucket->mu) {
+    return true;
+  } else if (bucket->below->mu == observation && bucket->mu == observation) {
     return true;
   } else if (bucket->above == NULL && bucket->mu <= observation) {
     return true;
@@ -254,8 +254,8 @@ void init_decaying_histogram(
   expected_count = 1.0 / (alpha * target_buckets);
 
   // TODO: What are good thresholds?
-  histogram->delete_bucket_threshold = expected_count * (1.0 / 2.0);
-  histogram->split_bucket_threshold = expected_count * (3.0 / 2.0);
+  histogram->delete_bucket_threshold = expected_count * (1.0 / 4.0);
+  histogram->split_bucket_threshold = expected_count * (7.0 / 4.0);
   histogram->alpha = alpha;
   histogram->max_num_buckets = 2 *
       (uint32_t)CEIL(max_total_count, histogram->delete_bucket_threshold);
@@ -294,7 +294,7 @@ bool find_bucket_helper(
   } else {
     pthread_mutex_lock(bucket->boundary_mtx);
 
-    if (!is_target_bucket_boundary(bucket, observation)) {
+    if (!is_target_boundary(bucket, observation)) {
       // If we raced, restart.
       pthread_mutex_unlock(bucket->boundary_mtx);
       return false;
@@ -308,7 +308,7 @@ struct bucket * find_bucket(
     struct decaying_histogram *histogram, double observation, int mp_flag) {
   uint32_t low, mid, high;
   struct bucket *bucket;
-  int tries = 0;
+  int tries = 0, retries = 0;
 
   while (histogram->num_buckets == 1) {
     bucket = &histogram->bucket_list[0];
@@ -316,28 +316,32 @@ struct bucket * find_bucket(
       return bucket;
   }
 
-  low = 0;
-  high = histogram->num_buckets - 1;
+  do {
+    low = 0;
+    high = histogram->num_buckets;
 
-  while (low <= high) {
-    mid = (low + high) / 2;
-    bucket = &histogram->bucket_list[mid];
-    if (is_target_bucket_boundary(bucket, observation)) {
-      if (find_bucket_helper(bucket, observation, mp_flag)) {
-        return bucket;
+    while (low < high) {
+      mid = (low + high) / 2;
+      bucket = &histogram->bucket_list[mid];
+      if (is_target_boundary(bucket, observation)) {
+        if (find_bucket_helper(bucket, observation, mp_flag)) {
+          return bucket;
+        } else {
+          // We raced, so start over.
+          retries++;
+          low = 0;
+          high = histogram->num_buckets;
+        }
+      } else if (bucket->mu < observation) {
+        low = mid + 1;
       } else {
-        // We raced, so start over.
-        low = 0;
-        high = histogram->num_buckets - 1;
+        high = mid;
       }
-    } else if (bucket->mu < observation) {
-      low = mid + 1;
-    } else {
-      high = mid;
+      tries++;
     }
-    tries += 1;
-  }
-  assert(false);
+    // We can fail to find a bucket if the bucket boundaries moved around
+    // during the search. Start over.
+  } while (1);
   return NULL;
 }
 
