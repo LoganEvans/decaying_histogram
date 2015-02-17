@@ -131,7 +131,8 @@ TEST_F(HistogramTest, TargetBoundary) {
       histogram_->bucket_list[1].below = &histogram_->bucket_list[0];
     }
 
-    for (double offset = -0.25; offset <= 0.26; offset += 0.25) {
+    for (int offset_num = -1; offset_num <= 1; offset_num++) {
+      double offset = offset_num / 4.0;
       for (double center = 1; center < num_buckets - 1; center += 1.0) {
         target_boundary_seen = false;
         for (int idx = 0; idx < num_buckets; idx++) {

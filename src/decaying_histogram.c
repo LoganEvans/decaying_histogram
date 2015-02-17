@@ -78,19 +78,21 @@ void init_bucket(struct bucket *to_init) {
  * current bucket mu.
  */
 bool is_target_boundary(struct bucket *bucket, double observation) {
-  if (bucket->below == NULL && observation <= bucket->mu) {
-    return true;
-  } else if (bucket->below == NULL && bucket->above == NULL) {
-    return true;
-  } else if (bucket->below == NULL) {
-    return false;
-  } else if (observation < bucket->below->mu) {
-    return false;
-  } else if (bucket->below->mu <= observation && observation < bucket->mu) {
-    return true;
-  } else if (bucket->below->mu == observation && bucket->mu == observation) {
-    return true;
-  } else if (bucket->above == NULL && bucket->mu <= observation) {
+  double left_mu, mu;
+  if (bucket->below == NULL) {
+    left_mu = observation - 1.0;
+  } else {
+    left_mu = bucket->below->mu;
+  }
+
+  mu = bucket->mu;
+  if (bucket->above == NULL) {
+    mu = observation + 1.0;
+  } else if (left_mu == mu && observation == mu) {
+    mu = observation + 1.0;
+  }
+
+  if (left_mu <= observation && observation < mu) {
     return true;
   } else {
     return false;
@@ -308,7 +310,7 @@ struct bucket * find_bucket(
     struct decaying_histogram *histogram, double observation, int mp_flag) {
   uint32_t low, mid, high;
   struct bucket *bucket;
-  int tries = 0, retries = 0;
+  int tries = 0, retries = 0, loops = 0;
 
   while (histogram->num_buckets == 1) {
     bucket = &histogram->bucket_list[0];
@@ -332,13 +334,14 @@ struct bucket * find_bucket(
           low = 0;
           high = histogram->num_buckets;
         }
-      } else if (bucket->mu < observation) {
+      } else if (bucket->mu <= observation) {
         low = mid + 1;
       } else {
         high = mid;
       }
       tries++;
     }
+    loops++;
     // We can fail to find a bucket if the bucket boundaries moved around
     // during the search. Start over.
   } while (1);
