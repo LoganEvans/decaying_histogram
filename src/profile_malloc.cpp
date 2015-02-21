@@ -41,6 +41,7 @@
 #define PERMITTED_BYTES (1ULL * 1024 * 1024 * 1024)
 #define BYTES_PER_MALLOC (1024ULL * 1024)
 #define MAX_NUM_THREADS 200
+#define CONSTANT_SPACE_PER_TRIAL 0
 
 static struct decaying_histogram *g_histogram;
 
@@ -115,6 +116,7 @@ int main() {
   tim.tv_sec = 0;
   tim.tv_nsec = 1000000000 / FRAMES_PER_SECOND;
 
+  args.permitted_bytes = PERMITTED_BYTES / MAX_NUM_THREADS;
   args.bytes_per_malloc = BYTES_PER_MALLOC;
 
   g_histogram = new struct decaying_histogram;
@@ -123,7 +125,9 @@ int main() {
   for (int num_threads = 1; num_threads < MAX_NUM_THREADS; num_threads++) {
     sprintf(title, "threads: %d", num_threads);
     args.end_timestamp = rdtsc() + CYCLES;
-    args.permitted_bytes = PERMITTED_BYTES / num_threads;
+    if (CONSTANT_SPACE_PER_TRIAL)
+      args.permitted_bytes = PERMITTED_BYTES / num_threads;
+
     for (int i = 0; i < num_threads; i++)
       pthread_create(
         &threads[i], NULL, (void *(*)(void *))thread_func, &args);
