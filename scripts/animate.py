@@ -21,10 +21,10 @@ def update(num):
     if "xlabel" in new_data:
         pyplot.xlabel(new_data["xlabel"])
     for idx, data in enumerate(reversed(update.history)):
-        densities = np.array(data['densities'])
+        weights = np.array(data['weights'])
         boundaries = np.array(data['boundaries'])
         widths = boundaries[1:] - boundaries[:-1]
-        heights = densities.astype(np.float)/widths
+        heights = weights.astype(np.float)/widths
         pyplot.fill_between(
                 boundaries.repeat(2)[1:-1], heights.repeat(2),
                 facecolor='steelblue',

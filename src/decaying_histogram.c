@@ -58,19 +58,28 @@ static bool perform_add(
     bool recheck_right_boundary, int mp_flag);
 static bool find_bucket_helper(
     struct bucket *bucket, double observation, int mp_flag);
-//static void assert_consistent(struct decaying_histogram *histogram);
 
 
-void init_bucket(struct bucket *to_init) {
-  to_init->count = 0.0;
-  to_init->mu = 0.0;
-  to_init->update_generation = 0;
-  to_init->below = NULL;
-  to_init->above = NULL;
+struct bucket * init_bucket(void) {
+  struct bucket * bucket;
 
-  to_init->boundary_mtx =
+  bucket = (struct bucket *)malloc(sizeof(struct bucket));
+  bucket->count = 0.0;
+  bucket->mu = 0.0;
+  bucket->update_generation = 0;
+  bucket->below = NULL;
+  bucket->above = NULL;
+
+  bucket->boundary_mtx =
     (pthread_mutex_t *)malloc(sizeof(pthread_mutex_t));
-  pthread_mutex_init(to_init->boundary_mtx, NULL);
+  pthread_mutex_init(bucket->boundary_mtx, NULL);
+
+  return bucket;
+}
+
+void destroy_bucket(struct bucket *bucket) {
+  free(bucket->boundary_mtx);
+  free(bucket);
 }
 
 /*
@@ -116,10 +125,13 @@ void decay(
 }
 
 /*
+ * This is a bit of a misnomer... this doesn't return the height of the bar,
+ * but instead returns the area of the bar.
+ *
  * If generation == 0, this will provide the density estimate using the last
  * update generation as to compute the count.
  */
-double density(
+double weight(
     struct decaying_histogram *histogram, struct bucket *bucket,
     uint64_t generation,
     double *lower_bound_output, double *upper_bound_output) {
@@ -261,11 +273,15 @@ void init_decaying_histogram(
   histogram->alpha = alpha;
   histogram->max_num_buckets = 2 *
       (uint32_t)CEIL(max_total_count, histogram->delete_bucket_threshold);
-  histogram->bucket_list = (struct bucket *)malloc(
-      sizeof(struct bucket) * histogram->max_num_buckets);
-  histogram->num_buckets = 1;
+  histogram->bucket_list = (struct bucket **)malloc(
+      sizeof(struct bucket*) * histogram->max_num_buckets);
+
   for (idx = 0; idx < histogram->max_num_buckets; idx++)
-    init_bucket(&histogram->bucket_list[idx]);
+    histogram->bucket_list[idx] = NULL;
+
+  histogram->bucket_list[0] = init_bucket();
+  histogram->num_buckets = 1;
+
   histogram->generation = 0;
 
   histogram->pow_table = (double *)malloc(
@@ -285,6 +301,11 @@ double total_count(struct decaying_histogram *histogram, uint64_t generation) {
 }
 
 void clean_decaying_histogram(struct decaying_histogram *histogram) {
+  uint32_t idx;
+
+  for (idx = 0; idx < histogram->max_num_buckets; idx++)
+    free(histogram->bucket_list[idx]);
+
   free(histogram->bucket_list);
   free(histogram->pow_table);
 }
@@ -313,7 +334,7 @@ struct bucket * find_bucket(
   int tries = 0, retries = 0, loops = 0;
 
   while (histogram->num_buckets == 1) {
-    bucket = &histogram->bucket_list[0];
+    bucket = histogram->bucket_list[0];
     if (find_bucket_helper(bucket, observation, mp_flag))
       return bucket;
   }
@@ -324,7 +345,7 @@ struct bucket * find_bucket(
 
     while (low < high) {
       mid = (low + high) / 2;
-      bucket = &histogram->bucket_list[mid];
+      bucket = histogram->bucket_list[mid];
       if (is_target_boundary(bucket, observation)) {
         if (find_bucket_helper(bucket, observation, mp_flag)) {
           return bucket;
@@ -357,7 +378,7 @@ void full_refresh(struct decaying_histogram *histogram, int mp_flag) {
     pthread_rwlock_wrlock(&histogram->rwlock);
 
   for (idx = 0; idx < histogram->num_buckets; idx++)
-    decay(histogram, &histogram->bucket_list[idx], histogram->generation);
+    decay(histogram, histogram->bucket_list[idx], histogram->generation);
 
   /*
    * In order to make sure we don't overrun the number of buckets available,
@@ -367,7 +388,7 @@ void full_refresh(struct decaying_histogram *histogram, int mp_flag) {
   do {
     do_another_round = false;
     for (idx = 0; idx < histogram->num_buckets; idx++) {
-      bucket = &histogram->bucket_list[idx];
+      bucket = histogram->bucket_list[idx];
       if (!finished_deletes &&
           bucket->count < histogram->delete_bucket_threshold) {
         delete_bucket(histogram, idx);
@@ -452,10 +473,32 @@ void add_observation(
   if (mp_flag & DHIST_MULTI_THREADED)
       pthread_rwlock_unlock(&histogram->rwlock);
 
-  if (bucket->count < histogram->delete_bucket_threshold)
+  for (int i = 0; i < histogram->num_buckets - 1; i++) {
+    assert(histogram->bucket_list[i]->above == histogram->bucket_list[i + 1]);
+    assert(histogram->bucket_list[i]->mu <= histogram->bucket_list[i + 1]->mu);
+  }
+  for (int i = 1; i < histogram->num_buckets; i++) {
+    assert(histogram->bucket_list[i]->below == histogram->bucket_list[i - 1]);
+  }
+
+  if (bucket->count < histogram->delete_bucket_threshold && histogram->num_buckets > 2) {
     full_refresh(histogram, mp_flag);
-  if (bucket->count > histogram->split_bucket_threshold)
+    //printf("delete\n");
+    //print_histogram(histogram, true, NULL, NULL, mp_flag);
+  }
+  if (bucket->count > histogram->split_bucket_threshold) {
+    //printf("split\n");
     full_refresh(histogram, mp_flag);
+    //print_histogram(histogram, true, NULL, NULL, mp_flag);
+  }
+
+  for (int i = 0; i < histogram->num_buckets - 1; i++) {
+    assert(histogram->bucket_list[i]->above == histogram->bucket_list[i + 1]);
+    assert(histogram->bucket_list[i]->mu <= histogram->bucket_list[i + 1]->mu);
+  }
+  for (int i = 1; i < histogram->num_buckets; i++) {
+    assert(histogram->bucket_list[i]->below == histogram->bucket_list[i - 1]);
+  }
 }
 
 void print_histogram(
@@ -463,7 +506,7 @@ void print_histogram(
     const char *title, const char *xlabel, int mp_flag) {
   uint32_t idx, num_buckets;
   uint64_t generation;
-  double *boundaries, *densities;
+  double *boundaries, *weights;
   struct bucket *left, *right;
 
   if (mp_flag & DHIST_SINGLE_THREADED) {
@@ -475,7 +518,7 @@ void print_histogram(
   }
 
   num_buckets = histogram->num_buckets;
-  densities = (double *)malloc(sizeof(double) * num_buckets);
+  weights = (double *)malloc(sizeof(double) * num_buckets);
   boundaries = (double *)malloc(sizeof(double) * (num_buckets + 1));
 
   if (mp_flag & DHIST_MULTI_THREADED) {
@@ -489,14 +532,14 @@ void print_histogram(
   right = NULL;
   for (idx = 0; idx < num_buckets; idx++) {
     left = right;
-    right = &histogram->bucket_list[idx];
+    right = histogram->bucket_list[idx];
     if (mp_flag & DHIST_MULTI_THREADED) {
       pthread_mutex_lock(right->boundary_mtx);
-      densities[idx] = density(
+      weights[idx] = weight(
           histogram, right, generation, &boundaries[idx], NULL);
       pthread_mutex_unlock(right->boundary_mtx);
     } else {
-      densities[idx] = density(
+      weights[idx] = weight(
           histogram, right, generation, &boundaries[idx], NULL);
     }
   }
@@ -518,11 +561,11 @@ void print_histogram(
 
   printf("\"generation\": %lu, ", generation);
 
-  printf("\"densities\": [");
+  printf("\"weights\": [");
   for (idx = 0; idx < num_buckets - 1; idx++) {
-    printf("%lf, ", densities[idx]);
+    printf("%lf, ", weights[idx]);
   }
-  printf("%lf], ", densities[idx]);
+  printf("%lf], ", weights[idx]);
 
   printf("\"boundaries\": [");
   for (idx = 0; idx < num_buckets; idx++) {
@@ -530,7 +573,7 @@ void print_histogram(
   }
   printf("%lf]}\n", boundaries[idx]);
 
-  free(densities);
+  free(weights);
   free(boundaries);
 }
 
@@ -545,7 +588,7 @@ void delete_bucket(
   if (histogram->num_buckets <= 2)
     return;  // Let's not.
 
-  dying_bucket = &histogram->bucket_list[bucket_idx];
+  dying_bucket = histogram->bucket_list[bucket_idx];
   if (bucket_idx == 0)
     lucky_idx = bucket_idx + 1;
   else if (bucket_idx == histogram->num_buckets - 1)
@@ -555,23 +598,29 @@ void delete_bucket(
   else
     lucky_idx = bucket_idx + 1;
 
-  lucky_bucket = &histogram->bucket_list[lucky_idx];
+  lucky_bucket = histogram->bucket_list[lucky_idx];
   lucky_bucket->mu =
       (lucky_bucket->mu * lucky_bucket->count +
        dying_bucket->mu * dying_bucket->count) /
       (lucky_bucket->count + dying_bucket->count);
   lucky_bucket->count += dying_bucket->count;
+  if (dying_bucket->below == lucky_bucket) {
+    lucky_bucket->above = dying_bucket->above;
+    if (lucky_bucket->above)
+      lucky_bucket->above->below = lucky_bucket;
+  } else {
+    lucky_bucket->below = dying_bucket->below;
+    if (lucky_bucket->below)
+      lucky_bucket->below->above = lucky_bucket;
+  }
+  destroy_bucket(dying_bucket);
 
   // Shift everything left.
   for (idx = bucket_idx; idx < histogram->num_buckets - 1; idx++) {
-    histogram->bucket_list[idx].count = histogram->bucket_list[idx + 1].count;
-    histogram->bucket_list[idx].mu = histogram->bucket_list[idx + 1].mu;
-    histogram->bucket_list[idx].update_generation =
-        histogram->bucket_list[idx + 1].update_generation;
+    histogram->bucket_list[idx] = histogram->bucket_list[idx + 1];
   }
+  histogram->bucket_list[histogram->num_buckets] = NULL;
   --histogram->num_buckets;
-  histogram->bucket_list[histogram->num_buckets].below = NULL;
-  histogram->bucket_list[histogram->num_buckets - 1].above = NULL;
 
   return;
 }
@@ -580,44 +629,35 @@ void split_bucket(
     struct decaying_histogram *histogram, uint32_t bucket_idx) {
   uint32_t idx;
   double lower_bound, upper_bound, diameter, median;
-  struct bucket *left, *right, *far_right;
+  struct bucket *left, *right;
 
   if (histogram->num_buckets == 2 &&
-      histogram->bucket_list[0].mu == histogram->bucket_list[1].mu) {
+      histogram->bucket_list[0]->mu == histogram->bucket_list[1]->mu) {
     // This will happen if we observe a stream of constants. Let's avoid
     // making more than two buckets until we have observed two unique values.
     return;
   }
 
+  right = histogram->bucket_list[bucket_idx];
+  lower_bound = compute_bound(histogram, right->below, right);
+  upper_bound = compute_bound(histogram, right, right->above);
+
   // Shift everything right.
   for (idx = histogram->num_buckets; idx > bucket_idx; idx--) {
-    histogram->bucket_list[idx].count = histogram->bucket_list[idx - 1].count;
-    histogram->bucket_list[idx].mu = histogram->bucket_list[idx - 1].mu;
-    histogram->bucket_list[idx].update_generation =
-        histogram->bucket_list[idx - 1].update_generation;
+    histogram->bucket_list[idx] = histogram->bucket_list[idx - 1];
   }
-  histogram->bucket_list[histogram->num_buckets].above = NULL;
-  if (histogram->num_buckets > 0) {
-    histogram->bucket_list[histogram->num_buckets - 1].above =
-        &histogram->bucket_list[histogram->num_buckets];
-    histogram->bucket_list[histogram->num_buckets].below =
-        &histogram->bucket_list[histogram->num_buckets - 1];
-  } else {
-    histogram->bucket_list[histogram->num_buckets].below = NULL;
-  }
+
+  histogram->bucket_list[bucket_idx] = init_bucket();
   ++histogram->num_buckets;
+  left = histogram->bucket_list[bucket_idx];
 
-  // left is the bucket we are splitting.
-  left = &histogram->bucket_list[bucket_idx];
-  right = &histogram->bucket_list[bucket_idx + 1];
-  if (bucket_idx + 2 < histogram->num_buckets)
-    far_right = &histogram->bucket_list[bucket_idx + 2];
-  else
-    far_right = NULL;
-
+  left->below = right->below;
+  if (left->below)
+    left->below->above = left;
   left->above = right;
-  left->count /= 2.0;
-  right->count = left->count;
+  right->below = left;
+  right->count /= 2.0;
+  left->count = right->count;
   if (histogram->num_buckets == 2) {
     // This is an awkward split because we don't have enough information to
     // compute a diameter. Instead, we can set mu to the same value in both
@@ -625,18 +665,18 @@ void split_bucket(
     // as we observe a non-mu entry, the split between the buckets
     // will be more sensical. However, we will need to take care to not split
     // a bucket again until this happens.
-    left->count /= 2.0;
-    right->count = left->count;
-    right->mu = left->mu;
+    left->mu = right->mu;
   } else {
-    lower_bound = compute_bound(histogram, left->below, left);
-    upper_bound = compute_bound(histogram, left, right);
-
     diameter = upper_bound - lower_bound;
     median = lower_bound + diameter / 2.0;
     left->mu = median - diameter / 6.0;
     right->mu = median + diameter / 6.0;
   }
+  assert(left->mu <= right->mu);
+  if (left->below)
+    assert(left->below->mu <= left->mu);
+  if (right->above)
+    assert(right->mu <= right->above->mu);
 
   right->update_generation = left->update_generation;
 
@@ -656,68 +696,4 @@ double Kolomogorov_Smirnov_statistic(
   assert(false);
   return 0.0;
 }
-
-#if 0
-void assert_consistent(struct decaying_histogram *histogram) {
-  int idx;
-  struct bucket *bucket;
-
-  assert(histogram->num_buckets <= histogram->max_num_buckets);
-  assert(histogram->num_buckets > 0);
-
-  for (idx = 0; idx < histogram->num_buckets; idx++)
-    decay(histogram, &histogram->bucket_list[idx], histogram->generation);
-  for (idx = 0; idx < histogram->num_buckets; idx++) {
-    bucket = &histogram->bucket_list[idx];
-    assert(
-        bucket->lower_bound <= bucket->mu &&
-        bucket->mu <= bucket->upper_bound);
-    assert(bucket->mu != NAN);
-    assert(bucket->mu != INFINITY);
-    assert(bucket->lower_bound != NAN);
-    assert(bucket->lower_bound != INFINITY);
-    assert(bucket->upper_bound != NAN);
-    assert(bucket->upper_bound != INFINITY);
-  }
-
-  for (idx = 1; idx < histogram->num_buckets - 1; idx++) {
-    assert(
-        &histogram->bucket_list[idx - 1] == histogram->bucket_list[idx].below);
-    if (&histogram->bucket_list[idx + 1] !=
-        histogram->bucket_list[idx].above) {
-      printf("(%d / %d) &bucket_list[%d] (==%lx) !="
-             "bucket_list[%d].above (==%lx)\n",
-          idx, histogram->num_buckets,
-          idx + 1, (uint64_t)&histogram->bucket_list[idx + 1],
-          idx, (uint64_t)histogram->bucket_list[idx].above);
-      assert(false);
-    }
-    if (histogram->bucket_list[idx].upper_bound !=
-        histogram->bucket_list[idx + 1].lower_bound) {
-      printf("(%d / %d) bucket_list[%d].upper_bound (==%lf) != "
-             "bucket_list[%d].lower_bound (==%lf)\n",
-          idx, histogram->num_buckets,
-          idx, histogram->bucket_list[idx].upper_bound,
-          idx + 1, histogram->bucket_list[idx + 1].lower_bound);
-      printf("!!!!!\n");
-      for (idx = 0; idx < histogram->num_buckets; idx++) {
-        printf("??? %lf | %lf\n",
-            histogram->bucket_list[idx].lower_bound,
-            histogram->bucket_list[idx].upper_bound);
-      }
-      assert(false);
-    }
-  }
-  assert(NULL == histogram->bucket_list[0].below);
-  assert(NULL == histogram->bucket_list[histogram->num_buckets].above);
-  if (histogram->num_buckets > 1) {
-    assert(
-        histogram->bucket_list[0].upper_bound ==
-        histogram->bucket_list[1].lower_bound);
-    assert(
-        histogram->bucket_list[histogram->num_buckets - 2].upper_bound ==
-        histogram->bucket_list[histogram->num_buckets - 1].lower_bound);
-  }
-}
-#endif
 

@@ -54,7 +54,7 @@ struct decaying_histogram {
   double split_bucket_threshold;
   double alpha;
   uint64_t generation;
-  struct bucket *bucket_list;
+  struct bucket **bucket_list;
   uint32_t num_buckets;
   uint32_t max_num_buckets;
   double *pow_table;
@@ -64,7 +64,8 @@ struct decaying_histogram {
 
 #define ABS_DIFF(x, y) (((x) - (y)) > 0 ? (x) - (y) : (y) - (x))
 
-void init_bucket(struct bucket *to_init);
+struct bucket * init_bucket(void);
+void destroy_bucket(struct bucket *bucket);
 void init_decaying_histogram(
     struct decaying_histogram *histogram, int target_buckets,
     double alpha);
@@ -82,7 +83,7 @@ void add_observation(
 struct bucket * find_bucket(
     struct decaying_histogram *histogram, double observation, int mp_flag);
 double total_count(struct decaying_histogram *histogram, uint64_t generation);
-double density(
+double weight(
     struct decaying_histogram *histogram, struct bucket *bucket,
     uint64_t generation,
     double *lower_bound_output, double *upper_bound_output);
