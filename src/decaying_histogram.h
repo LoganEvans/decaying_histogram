@@ -57,6 +57,7 @@ struct decaying_histogram {
   double split_bucket_threshold;
   double alpha;
   uint64_t generation;
+  struct bucket *root;
   struct bucket **bucket_list;
   uint32_t num_buckets;
   uint32_t max_num_buckets;
@@ -102,6 +103,11 @@ void print_histogram(
     const char *title, const char *xaxis, int mp_flag);
 void full_refresh(struct decaying_histogram *histogram, int mp_flag);
 bool is_target_boundary(struct bucket *bucket, double observation);
+
+int assert_invariant(struct bucket *root);
+struct bucket * split_bucket(
+    struct decaying_histogram *histogram, struct bucket *bucket);
+void print_tree(struct bucket *bucket);
 
 #ifdef __cplusplus
 }
