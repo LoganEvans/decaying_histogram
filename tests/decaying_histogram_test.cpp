@@ -180,7 +180,7 @@ TEST_F(HistogramTest, CheckSplitBucket) {
   histogram_->root = init_bucket(histogram_->namer++);
   histogram_->root->height = 1;
 
-  for (int idx = 0; idx < 90; idx++) {
+  for (int idx = 0; idx < 900; idx++) {
     cursor = histogram_->root;
     for (int scramble = 0; scramble < 90; scramble++) {
       int choice = distribution(g_generator);
@@ -198,8 +198,9 @@ TEST_F(HistogramTest, CheckSplitBucket) {
     }
 
     split_bucket(histogram_, cursor);
-    print_tree(histogram_->root);
+    //print_tree(histogram_->root);
     assert_invariant(histogram_->root);
   }
+  //print_tree(histogram_->root);
 }
 

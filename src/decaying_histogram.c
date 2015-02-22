@@ -59,6 +59,8 @@ static bool perform_add(
     bool recheck_right_boundary, int mp_flag);
 static bool find_bucket_helper(
     struct bucket *bucket, double observation, int mp_flag);
+static void fix_balance(
+    struct decaying_histogram *histogram, struct bucket *bucket);
 
 
 struct bucket * init_bucket(int name) {
@@ -718,6 +720,10 @@ int assert_invariant(struct bucket *root) {
   } else {
     left = assert_invariant(root->children[0]);
     right = assert_invariant(root->children[1]);
+    if (root == left || root == right) {
+      printf("root == a child\n");
+      assert(false);
+    }
     if (root->height != left + 1 && root->height != right + 1 ||
         (root->height <= left || root->height <= right)) {
       printf(
@@ -727,8 +733,8 @@ int assert_invariant(struct bucket *root) {
     }
 
     if (ABS(right - left) > 1) {
-      printf("invariant not met. heights -- left: %d right %d\n",
-        left, right);
+      printf("invariant not met. node: %d heights -- left: %d right %d\n",
+        root->name, left, right);
       assert(false);
     }
 
@@ -754,10 +760,10 @@ void fix_height(struct bucket *bucket) {
   }
 }
 
-struct bucket * rotate_single(struct bucket *root, int dir) {
+struct bucket * rotate_single(
+    struct decaying_histogram *histogram, struct bucket *root, int dir) {
   struct bucket *new_root;
   int dir_from_parent;
-  printf(" > rotate_single(%d, %d)\n", root->name, dir);
 
   new_root = root->children[!dir];
   new_root->parent = root->parent;
@@ -766,32 +772,33 @@ struct bucket * rotate_single(struct bucket *root, int dir) {
   if (new_root->children[dir])
     new_root->children[dir]->parent = root->children[!dir];
   new_root->children[dir] = root;
-  root->parent = new_root->children[dir];
+  root->parent = new_root;
 
   if (new_root->parent != NULL) {
-    if (new_root->parent->children[0] == root)
-      dir_from_parent = 0;
-    else
-      dir_from_parent = 1;
+    dir_from_parent = (new_root->parent->children[1] == root);
     new_root->parent->children[dir_from_parent] = new_root;
+  } else {
+    histogram->root = new_root;
   }
 
-  fix_height(root);
-  fix_height(new_root);
+  fix_balance(histogram, new_root->children[0]);
+  fix_balance(histogram, new_root->children[1]);
+  fix_balance(histogram, new_root);
 
   return new_root;
 }
 
-struct bucket * rotate_double(struct bucket *root, int dir) {
+struct bucket * rotate_double(
+    struct decaying_histogram *histogram, struct bucket *root, int dir) {
   struct bucket *new_root;
   int dir_from_parent;
-  printf(" > rotate_double(%d, %d)\n", root->name, dir);
 
   new_root = root->children[!dir]->children[dir];
   new_root->parent = root->parent;
 
   root->children[!dir]->children[dir] = new_root->children[!dir];
-  new_root->children[!dir]->parent = root->children[!dir]->children[dir];
+  if (new_root->children[!dir])
+    new_root->children[!dir]->parent = root->children[!dir]->children[dir];
 
   new_root->children[!dir] = root->children[!dir];
   root->children[!dir]->parent = new_root->children[!dir];
@@ -801,7 +808,7 @@ struct bucket * rotate_double(struct bucket *root, int dir) {
     new_root->children[dir]->parent = root->children[!dir];
 
   new_root->children[dir] = root;
-  root->parent = new_root->children[dir];
+  root->parent = new_root;
 
   if (new_root->parent != NULL) {
     if (new_root->parent->children[0] == root)
@@ -809,11 +816,13 @@ struct bucket * rotate_double(struct bucket *root, int dir) {
     else
       dir_from_parent = 1;
     new_root->parent->children[dir_from_parent] = new_root;
+  } else {
+    histogram->root = new_root;
   }
 
-  fix_height(new_root->children[0]);
-  fix_height(new_root->children[1]);
-  fix_height(new_root);
+  fix_balance(histogram, new_root->children[0]);
+  fix_balance(histogram, new_root->children[1]);
+  fix_balance(histogram, new_root);
 
   return new_root;
 }
@@ -837,56 +846,24 @@ void fix_balance(struct decaying_histogram *histogram, struct bucket *bucket) {
   int balance;
   int prior_height;
   int dir, dir_from_parent;
-  printf(" > fix_balance(~, %d)\n", bucket->name);
 
   while (bucket != NULL) {
     fix_height(bucket);
     prior_height = bucket->height;
     balance = compute_balance(bucket);
-    printf(" <<loop>> (%d | %d, %d)\n",
-      bucket->name, bucket->children[0] ? bucket->children[0]->height : 0,
-      bucket->children[1] ? bucket->children[1]->height : 0);
-    printf("<<<<<<<<<<<\n");
-    print_tree(histogram->root);
-    printf(">>>>>>>>>>>\n");
     while (ABS(compute_balance(bucket)) >= 2) {
-      printf("balance: %d\n", compute_balance(bucket));
-      if (bucket->children[0] == NULL) {
-        dir = 0;
-      } else if (bucket->children[1] == NULL) {
-        dir = 1;
-      } else if (bucket->children[0]->height < bucket->children[1]->height) {
-        dir = 0;
-      } else {
-        dir = 1;
-      }
-      printf("rebalance! %d\n", dir);
+      balance = compute_balance(bucket);
+      dir = (balance < 0);
 
       if (bucket->children[!dir]->children[!dir] == NULL) {
-        bucket = rotate_double(bucket, dir);
-        fix_balance(histogram, bucket->children[0]);
-        fix_balance(histogram, bucket->children[1]);
+        bucket = rotate_double(histogram, bucket, dir);
       } else if (bucket->children[!dir]->children[dir] == NULL) {
-        bucket = rotate_single(bucket, dir);
+        bucket = rotate_single(histogram, bucket, dir);
       } else if (bucket->children[!dir]->children[dir]->height >
           bucket->children[!dir]->children[!dir]->height) {
-        bucket = rotate_double(bucket, dir);
-        fix_balance(histogram, bucket->children[0]);
-        fix_balance(histogram, bucket->children[1]);
+        bucket = rotate_double(histogram, bucket, dir);
       } else {
-        bucket = rotate_single(bucket, dir);
-      }
-
-      if (bucket->parent == NULL) {
-        histogram->root = bucket;
-      } else {
-        if (bucket->parent->children[0] == bucket) {
-          dir_from_parent = 0;
-        } else {
-          dir_from_parent = 1;
-        }
-
-        bucket->parent->children[dir_from_parent] = bucket;
+        bucket = rotate_single(histogram, bucket, dir);
       }
     }
 
@@ -921,8 +898,6 @@ struct bucket * split_bucket(
 }
 
 void _print_tree(struct bucket *bucket, int depth) {
-  printf("!!!!%d\n", depth);
-
   printf("%d(%d)", bucket->name, bucket->height);
 
   if (bucket->children[0]) {
