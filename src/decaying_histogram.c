@@ -61,14 +61,16 @@ static bool find_bucket_helper(
     struct bucket *bucket, double observation, int mp_flag);
 
 
-struct bucket * init_bucket(void) {
+struct bucket * init_bucket(int name) {
   struct bucket * bucket;
 
   bucket = (struct bucket *)malloc(sizeof(struct bucket));
   memset(bucket, 0, sizeof(struct bucket));
+  bucket->height = 1;
   bucket->boundary_mtx =
     (pthread_mutex_t *)malloc(sizeof(pthread_mutex_t));
   pthread_mutex_init(bucket->boundary_mtx, NULL);
+  bucket->name = name;
 
   return bucket;
 }
@@ -275,7 +277,7 @@ void init_decaying_histogram(
   for (idx = 0; idx < histogram->max_num_buckets; idx++)
     histogram->bucket_list[idx] = NULL;
 
-  histogram->bucket_list[0] = init_bucket();
+  histogram->bucket_list[0] = init_bucket(histogram->namer++);
   histogram->num_buckets = 1;
 
   histogram->generation = 0;
@@ -287,6 +289,8 @@ void init_decaying_histogram(
 
   pthread_rwlock_init(&histogram->rwlock, NULL);
   pthread_mutex_init(&histogram->generation_mutex, NULL);
+
+  histogram->namer = 10;
 
   return;
 }
@@ -695,6 +699,14 @@ double Kolomogorov_Smirnov_statistic(
   return 0.0;
 }
 
+int count_nodes(struct bucket *root) {
+  if (root == NULL) {
+    return 0;
+  } else {
+    return 1 + count_nodes(root->children[0]) + count_nodes(root->children[1]);
+  }
+}
+
 int assert_invariant(struct bucket *root) {
   int left, right;
 
@@ -706,9 +718,20 @@ int assert_invariant(struct bucket *root) {
   } else {
     left = assert_invariant(root->children[0]);
     right = assert_invariant(root->children[1]);
-    assert(ABS(right - left) <= 1);
-    assert(root->height == root->children[0]->height + 1 ||
-        root->height == root->children[1]->height + 1);
+    if (root->height != left + 1 && root->height != right + 1 ||
+        (root->height <= left || root->height <= right)) {
+      printf(
+        "root height is not correct. heights -- root: %d left: %d right: %d\n",
+        root->height, left, right);
+      assert(false);
+    }
+
+    if (ABS(right - left) > 1) {
+      printf("invariant not met. heights -- left: %d right %d\n",
+        left, right);
+      assert(false);
+    }
+
     return 1 + (left > right ? left : right);
   }
 }
@@ -719,7 +742,7 @@ void fix_height(struct bucket *bucket) {
   left = bucket->children[0];
   right = bucket->children[1];
 
-  if (left == right == NULL) {
+  if (left == NULL && right == NULL) {
     bucket->height = 1;
   } else if (left == NULL) {
     bucket->height = 1 + right->height;
@@ -732,36 +755,64 @@ void fix_height(struct bucket *bucket) {
 }
 
 struct bucket * rotate_single(struct bucket *root, int dir) {
-  struct bucket *save;
+  struct bucket *new_root;
+  int dir_from_parent;
+  printf(" > rotate_single(%d, %d)\n", root->name, dir);
 
-  save = root->children[!dir];
+  new_root = root->children[!dir];
+  new_root->parent = root->parent;
 
-  root->children[!dir] = save->children[dir];
-  save->children[dir]->parent = root->children[!dir];
-  save->children[dir] = root;
-  root->parent = save->children[dir];
+  root->children[!dir] = new_root->children[dir];
+  if (new_root->children[dir])
+    new_root->children[dir]->parent = root->children[!dir];
+  new_root->children[dir] = root;
+  root->parent = new_root->children[dir];
+
+  if (new_root->parent != NULL) {
+    if (new_root->parent->children[0] == root)
+      dir_from_parent = 0;
+    else
+      dir_from_parent = 1;
+    new_root->parent->children[dir_from_parent] = new_root;
+  }
 
   fix_height(root);
-  fix_height(save);
+  fix_height(new_root);
 
-  return save;
+  return new_root;
 }
 
 struct bucket * rotate_double(struct bucket *root, int dir) {
   struct bucket *new_root;
+  int dir_from_parent;
+  printf(" > rotate_double(%d, %d)\n", root->name, dir);
 
   new_root = root->children[!dir]->children[dir];
+  new_root->parent = root->parent;
 
   root->children[!dir]->children[dir] = new_root->children[!dir];
   new_root->children[!dir]->parent = root->children[!dir]->children[dir];
+
   new_root->children[!dir] = root->children[!dir];
   root->children[!dir]->parent = new_root->children[!dir];
+
   root->children[!dir] = new_root->children[dir];
-  new_root->children[dir]->parent = root->children[!dir];
+  if (new_root->children[dir])
+    new_root->children[dir]->parent = root->children[!dir];
+
   new_root->children[dir] = root;
   root->parent = new_root->children[dir];
 
-  fix_height(root);
+  if (new_root->parent != NULL) {
+    if (new_root->parent->children[0] == root)
+      dir_from_parent = 0;
+    else
+      dir_from_parent = 1;
+    new_root->parent->children[dir_from_parent] = new_root;
+  }
+
+  fix_height(new_root->children[0]);
+  fix_height(new_root->children[1]);
   fix_height(new_root);
 
   return new_root;
@@ -779,31 +830,49 @@ int compute_balance(struct bucket *bucket) {
       heights[dir] = bucket->children[dir]->height;
   }
 
-  if (heights[0] < heights[1]) {
-    return heights[1] - heights[0];
-  } else {
-    return heights[0] - heights[1];
-  }
+  return heights[1] - heights[0];
 }
 
 void fix_balance(struct decaying_histogram *histogram, struct bucket *bucket) {
   int balance;
   int prior_height;
   int dir, dir_from_parent;
+  printf(" > fix_balance(~, %d)\n", bucket->name);
 
   while (bucket != NULL) {
+    fix_height(bucket);
     prior_height = bucket->height;
     balance = compute_balance(bucket);
-    if (ABS(balance) == 2) {
-      if (bucket->children[0]->height < bucket->children[1]->height) {
+    printf(" <<loop>> (%d | %d, %d)\n",
+      bucket->name, bucket->children[0] ? bucket->children[0]->height : 0,
+      bucket->children[1] ? bucket->children[1]->height : 0);
+    printf("<<<<<<<<<<<\n");
+    print_tree(histogram->root);
+    printf(">>>>>>>>>>>\n");
+    while (ABS(compute_balance(bucket)) >= 2) {
+      printf("balance: %d\n", compute_balance(bucket));
+      if (bucket->children[0] == NULL) {
+        dir = 0;
+      } else if (bucket->children[1] == NULL) {
+        dir = 1;
+      } else if (bucket->children[0]->height < bucket->children[1]->height) {
         dir = 0;
       } else {
         dir = 1;
       }
+      printf("rebalance! %d\n", dir);
 
-      if (bucket->children[!dir]->children[dir]->height >
+      if (bucket->children[!dir]->children[!dir] == NULL) {
+        bucket = rotate_double(bucket, dir);
+        fix_balance(histogram, bucket->children[0]);
+        fix_balance(histogram, bucket->children[1]);
+      } else if (bucket->children[!dir]->children[dir] == NULL) {
+        bucket = rotate_single(bucket, dir);
+      } else if (bucket->children[!dir]->children[dir]->height >
           bucket->children[!dir]->children[!dir]->height) {
         bucket = rotate_double(bucket, dir);
+        fix_balance(histogram, bucket->children[0]);
+        fix_balance(histogram, bucket->children[1]);
       } else {
         bucket = rotate_single(bucket, dir);
       }
@@ -823,7 +892,6 @@ void fix_balance(struct decaying_histogram *histogram, struct bucket *bucket) {
 
     if (bucket->height != prior_height) {
       bucket = bucket->parent;
-      fix_height(bucket);
     } else {
       break;
     }
@@ -835,7 +903,8 @@ struct bucket * split_bucket(
   int dir;
   struct bucket *new_bucket;
 
-  new_bucket = init_bucket();
+  new_bucket = init_bucket(histogram->namer++);
+  printf(" > split_bucket %d => %d\n", bucket->name, new_bucket->name);
   new_bucket->parent = bucket;
 
   if (compute_balance(bucket) <= 0) {
@@ -847,38 +916,31 @@ struct bucket * split_bucket(
   new_bucket->children[dir] = bucket->children[dir];
   bucket->children[dir] = new_bucket;
 
+  fix_balance(histogram, new_bucket);
   fix_balance(histogram, bucket);
 }
 
-bool _print_tree(struct bucket *bucket, int depth, int print_depth) {
-  bool printed = false;
+void _print_tree(struct bucket *bucket, int depth) {
+  printf("!!!!%d\n", depth);
 
-  if (bucket == NULL) {
-    return false;
+  printf("%d(%d)", bucket->name, bucket->height);
+
+  if (bucket->children[0]) {
+    printf("\t >");
+    _print_tree(bucket->children[0], depth + 1);
   }
 
-  if (depth == print_depth) {
-    printf("%lx(%lx, %lx| %d)\t",
-        (uint64_t)bucket,
-        (uint64_t)bucket->children[0], (uint64_t)bucket->children[1],
-        bucket->height);
-    printed = true;
+  if (bucket->children[1]) {
+    printf("\n");
+    for (int i = 0; i < depth; i++)
+      printf("\t");
+    printf("\t\\>");
+    _print_tree(bucket->children[1], depth + 1);
   }
-
-  for (int dir = 0; dir <= 1; dir++) {
-    printed =
-        printed || _print_tree(bucket->children[dir], depth + 1, print_depth);
-  }
-
-  return printed;
 }
 
 void print_tree(struct bucket *bucket) {
-  int print_depth = 0;
-
-  do {
-    printf("\n%d:\t", print_depth);
-  } while (_print_tree(bucket, 0, print_depth++));
+  _print_tree(bucket, 0);
   printf("\n");
 }
 

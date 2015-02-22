@@ -177,13 +177,12 @@ TEST_F(HistogramTest, CheckSplitBucket) {
   struct bucket *cursor;
   std::uniform_int_distribution<int> distribution(0, 3);
 
-  histogram_->root = init_bucket();
+  histogram_->root = init_bucket(histogram_->namer++);
   histogram_->root->height = 1;
 
-  for (int idx = 0; idx < 10; idx++) {
+  for (int idx = 0; idx < 90; idx++) {
     cursor = histogram_->root;
-    for (int scramble = 0; scramble < 10; scramble++) {
-      printf("here\n");
+    for (int scramble = 0; scramble < 90; scramble++) {
       int choice = distribution(g_generator);
       switch (distribution(g_generator)) {
       case 0:

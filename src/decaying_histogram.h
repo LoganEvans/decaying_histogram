@@ -50,6 +50,7 @@ struct bucket {
   struct bucket *children[2];
   pthread_mutex_t *boundary_mtx;  /* lower boundary */
   int height;
+  int name;
 };
 
 struct decaying_histogram {
@@ -64,11 +65,12 @@ struct decaying_histogram {
   double *pow_table;
   pthread_rwlock_t rwlock;
   pthread_mutex_t generation_mutex;
+  int namer;
 };
 
 #define ABS_DIFF(x, y) (((x) - (y)) > 0 ? (x) - (y) : (y) - (x))
 
-struct bucket * init_bucket(void);
+struct bucket * init_bucket(int name);
 void destroy_bucket(struct bucket *bucket);
 void init_decaying_histogram(
     struct decaying_histogram *histogram, int target_buckets,
@@ -105,6 +107,7 @@ void full_refresh(struct decaying_histogram *histogram, int mp_flag);
 bool is_target_boundary(struct bucket *bucket, double observation);
 
 int assert_invariant(struct bucket *root);
+int count_nodes(struct bucket *root);
 struct bucket * split_bucket(
     struct decaying_histogram *histogram, struct bucket *bucket);
 void print_tree(struct bucket *bucket);
