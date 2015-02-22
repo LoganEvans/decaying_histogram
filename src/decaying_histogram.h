@@ -46,7 +46,10 @@ struct bucket {
   uint64_t update_generation;
   struct bucket *below;
   struct bucket *above;
+  struct bucket *parent;
+  struct bucket *children[2];
   pthread_mutex_t *boundary_mtx;  /* lower boundary */
+  int height;
 };
 
 struct decaying_histogram {

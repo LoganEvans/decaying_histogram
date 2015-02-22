@@ -38,6 +38,9 @@
 #define CEIL(x, y) ((int)((x) + ((int)(y) - 1)) / (int)(y))
 #endif
 
+#ifndef ABS
+#define ABS(x) ((x) < 0 ? -(x) : (x))
+#endif
 
 static void delete_bucket(
     struct decaying_histogram *histogram, uint32_t bucket_idx);
@@ -695,5 +698,128 @@ double Kolomogorov_Smirnov_statistic(
   assert(hist0 && hist1);
   assert(false);
   return 0.0;
+}
+
+void fix_height(struct bucket *bucket) {
+  struct bucket *left, *right;
+
+  left = bucket->left;
+  right = bucket->right;
+
+  if (left == right == NULL) {
+    bucket->height = 1;
+  } else if (left == NULL) {
+    bucket->height = 1 + right->height;
+  } else if (right == NULL) {
+    bucket->height = 1 + left->height;
+  } else {
+    bucket->height =
+        1 + (left->height > right->height ? left->height : right->height);
+  }
+}
+
+struct bucket * rotate_single(struct bucket *root, int dir) {
+  struct bucket *save;
+
+  save = root->children[!dir];
+
+  root->children[!dir] = save->children[dir];
+  save->children[dir]->parent = root->children[!dir];
+  save->children[dir] = root;
+  root->parent = save->children[dir];
+
+  root->height = compute_height(root);
+  save->height = compute_height(save);
+
+  return save;
+}
+
+struct bucket * rotate_double(struct bucket *root, int dir) {
+  struct bucket *new_root;
+
+  new_root = root->children[!dir]->children[dir];
+
+  root->children[!dir]->children[dir] = new_root->children[!dir];
+  new_root->children[!dir]->parent = root->children[!dir]->children[dir];
+  new_root->children[!dir] = root->children[!dir];
+  root->children[!dir]->parent = new_root->children[!dir];
+  root->children[!dir] = new_root->children[dir];
+  new_root->children[dir]->parent = root->children[!dir];
+  new_root->children[dir] = root;
+  root->parent = new_root->children[dir];
+
+  root->height = compute_height(root);
+  new_root->height = compute_height(new_root);
+
+  return new_root;
+}
+
+int compute_balance(struct bucket *bucket) {
+  int left_height, right_height;
+
+  if (left == NULL) {
+    left_height = 0;
+  } else {
+    left_height = left->height;
+  }
+
+  if (right == NULL) {
+    right_height = 0;
+  } else {
+    right_height = right->height;
+  }
+
+  if (left_height < right_height) {
+    return right_height - left_height;
+  } else {
+    return left_height - right_height;
+  }
+}
+
+void fix_balance(struct bucket *bucket) {
+  int balance;
+  int prior_height;
+  int dir, dir_from_parent;
+
+  while (bucket != NULL) {
+    prior_height = bucket->height;
+    balance = compute_balance(bucket);
+    if (ABS(balance) == 2) {
+      if (bucket->children[0]->height < bucket->children[1]->height) {
+        dir = 0;
+      } else {
+        dir = 1;
+      }
+
+      if (parent->children[0] == bucket) {
+        dir_from_parent = 0;
+      } else {
+        dir_from_parent = 1;
+      }
+
+      if (bucket->children[!dir]->children[dir]->height >
+          bucket->children[!dir]->children[!dir]->height) {
+        bucket = rotate_double(bucket, dir);
+      } else {
+        bucket = rotate_single(bucket, dir);
+      }
+
+      bucket->parent[dir_from_parent] = bucket;
+    }
+
+    if (bucket->height != prior_height) {
+      bucket = bucket->parent;
+      fix_height(bucket);
+    } else {
+      break;
+    }
+  }
+}
+
+struct bucket * split_bucket(struct bucket *bucket, int *done) {
+  // Split the bucket. If balance <= 0, the new bucket will be a right child.
+  // Otherwise, the new bucket will be a left child.
+
+  // March up the tree fixing the balance. If the balance is off by 2, rebalance.
 }
 
