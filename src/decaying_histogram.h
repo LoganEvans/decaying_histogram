@@ -50,7 +50,6 @@ struct bucket {
   struct bucket *children[2];
   pthread_mutex_t *boundary_mtx;  /* lower boundary */
   int height;
-  int name;
 };
 
 struct decaying_histogram {
@@ -59,18 +58,16 @@ struct decaying_histogram {
   double alpha;
   uint64_t generation;
   struct bucket *root;
-  struct bucket **bucket_list;
   uint32_t num_buckets;
   uint32_t max_num_buckets;
   double *pow_table;
   pthread_rwlock_t rwlock;
   pthread_mutex_t generation_mutex;
-  int namer;
 };
 
 #define ABS_DIFF(x, y) (((x) - (y)) > 0 ? (x) - (y) : (y) - (x))
 
-struct bucket * init_bucket(int name);
+struct bucket * init_bucket(void);
 void destroy_bucket(struct bucket *bucket);
 void init_decaying_histogram(
     struct decaying_histogram *histogram, int target_buckets,
@@ -103,7 +100,6 @@ double Kolomogorov_Smirnov_statistic(
 void print_histogram(
     struct decaying_histogram *histogram, bool estimate_ok,
     const char *title, const char *xaxis, int mp_flag);
-void full_refresh(struct decaying_histogram *histogram, int mp_flag);
 bool is_target_boundary(struct bucket *bucket, double observation);
 
 int assert_invariant(struct bucket *root);

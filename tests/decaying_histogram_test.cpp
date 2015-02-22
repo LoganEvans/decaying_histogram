@@ -165,7 +165,6 @@ TEST_F(HistogramTest, BucketCountsSumToTotalCount) {
   double count;
 
   count = 0.0;
-  full_refresh(histogram_, DHIST_SINGLE_THREADED);
   for (int idx = 0; idx < histogram_->num_buckets; idx++) {
     count += histogram_->bucket_list[idx]->count;
   }
@@ -177,7 +176,7 @@ TEST_F(HistogramTest, CheckSplitBucket) {
   struct bucket *cursor;
   std::uniform_int_distribution<int> distribution(0, 3);
 
-  histogram_->root = init_bucket(histogram_->namer++);
+  histogram_->root = init_bucket();
   histogram_->root->height = 1;
 
   for (int idx = 0; idx < 900; idx++) {
@@ -211,7 +210,7 @@ TEST_F(HistogramTest, CheckDeleteBucket) {
   int count = 99;
 
   while (iterations--) {
-    histogram_->root = init_bucket(histogram_->namer++);
+    histogram_->root = init_bucket();
     histogram_->root->height = 1;
 
     for (int idx = 0; idx < count; idx++) {
