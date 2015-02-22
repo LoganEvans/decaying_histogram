@@ -184,11 +184,11 @@ TEST_F(HistogramTest, CheckSplitBucket) {
     cursor = histogram_->root;
     for (int scramble = 0; scramble < 90; scramble++) {
       int choice = distribution(g_generator);
-      switch (distribution(g_generator)) {
+      switch (choice) {
       case 0:
       case 1:
         if (cursor->children[choice])
-          cursor->children[choice];
+          cursor = cursor->children[choice];
         break;
       default:
         if (cursor->parent)
@@ -198,9 +198,66 @@ TEST_F(HistogramTest, CheckSplitBucket) {
     }
 
     split_bucket(histogram_, cursor);
-    //print_tree(histogram_->root);
     assert_invariant(histogram_->root);
   }
   //print_tree(histogram_->root);
+  assert_invariant(histogram_->root);
+}
+
+TEST_F(HistogramTest, CheckDeleteBucket) {
+  struct bucket *cursor;
+  std::uniform_int_distribution<int> distribution(0, 3);
+  int iterations = 100;
+  int count = 99;
+
+  while (iterations--) {
+    histogram_->root = init_bucket(histogram_->namer++);
+    histogram_->root->height = 1;
+
+    for (int idx = 0; idx < count; idx++) {
+      cursor = histogram_->root;
+      for (int scramble = 0; scramble < 90; scramble++) {
+        int choice = distribution(g_generator);
+        switch (choice) {
+        case 0:
+        case 1:
+          if (cursor->children[choice]) {
+            cursor = cursor->children[choice];
+          }
+          break;
+        default:
+          if (cursor->parent) {
+            cursor = cursor->parent;
+          }
+          break;
+        }
+      }
+
+      split_bucket(histogram_, cursor);
+      assert_invariant(histogram_->root);
+    }
+    assert_invariant(histogram_->root);
+
+    for (int idx = 1; idx < count; idx++) {
+      cursor = histogram_->root;
+      for (int scramble = 0; scramble < count; scramble++) {
+        int choice = distribution(g_generator);
+        switch (choice) {
+        case 0:
+        case 1:
+          if (cursor->children[choice])
+            cursor = cursor->children[choice];
+          break;
+        default:
+          if (cursor->parent)
+            cursor = cursor->parent;
+          break;
+        }
+      }
+
+      delete_bucket(histogram_, cursor);
+      assert_invariant(histogram_->root);
+    }
+  }
 }
 

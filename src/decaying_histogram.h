@@ -108,7 +108,8 @@ bool is_target_boundary(struct bucket *bucket, double observation);
 
 int assert_invariant(struct bucket *root);
 int count_nodes(struct bucket *root);
-struct bucket * split_bucket(
+void split_bucket(struct decaying_histogram *histogram, struct bucket *bucket);
+void delete_bucket(
     struct decaying_histogram *histogram, struct bucket *bucket);
 void print_tree(struct bucket *bucket);
 
