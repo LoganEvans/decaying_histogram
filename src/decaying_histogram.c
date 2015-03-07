@@ -176,6 +176,7 @@ static uint64_t get_generation(
 /*
  * Returns true if the observation is between the lower bucket mu and the
  * current bucket mu.
+ * obs \in [bucket->below->mu, bucket->mu)
  */
 bool is_target_boundary(struct bucket *bucket, double observation) {
   double left_mu, mu;
@@ -343,13 +344,15 @@ void init_decaying_histogram(
   double max_total_count, expected_count;
   uint64_t idx;
   struct bucket *bucket;
+  double radius;
 
   max_total_count = 1.0 / alpha;
   expected_count = 1.0 / (alpha * target_buckets);
 
   // TODO: What are good thresholds?
-  histogram->delete_bucket_threshold = expected_count * (1.0 / 4.0);
-  histogram->split_bucket_threshold = expected_count * (7.0 / 4.0);
+  radius = 0.01;
+  histogram->delete_bucket_threshold = expected_count * (1.0 - radius);
+  histogram->split_bucket_threshold = expected_count * (1.0 + radius);
   histogram->alpha = alpha;
   histogram->max_num_buckets =
       (uint32_t)CEIL(max_total_count, histogram->delete_bucket_threshold);
@@ -410,22 +413,26 @@ bool find_bucket_helper(
 struct bucket * find_bucket(
     struct decaying_histogram *histogram, double observation, int mp_flag) {
   struct bucket *bucket;
-  int tries = 0, retries = 0;
 
   do {
     bucket = histogram->root;
     do {
-      if (is_target_boundary(bucket, observation)) {
+      // The first two branches are quick decisions that avoid computing
+      // the region where the boundary can exist.
+      if (bucket->below && observation < bucket->below->mu) {
+        bucket = bucket->children[0];
+      } else if (bucket->above && bucket->above->mu <= observation) {
+        bucket = bucket->children[1];
+      } else if (is_target_boundary(bucket, observation)) {
         if (find_bucket_helper(bucket, observation, mp_flag)) {
           return bucket;
         } else {
           // We raced, so start over.
-          retries++;
           bucket = histogram->root;
         }
+      } else {
+        bucket = bucket->children[bucket->mu <= observation];
       }
-      bucket = bucket->children[bucket->mu <= observation];
-      tries++;
     } while (bucket != NULL);
     // We can fail to find a bucket if the bucket boundaries moved around
     // during the search. Start over.
@@ -448,12 +455,12 @@ void add_observation(
     // we fail to take the other lock and that lock is below->boundary_mtx,
     // we'll drop our lock and try again.
 
-    boundary = compute_bound(histogram, bucket->below, bucket);
-
-    if (!bucket->below ) {
+    if (!bucket->below) {
       boundary = observation;
-    } else if (!bucket->above ) {
+    } else if (!bucket->above) {
       boundary = observation;
+    } else {
+      boundary = compute_bound(histogram, bucket->below, bucket);
     }
 
     if (mp_flag & DHIST_SINGLE_THREADED) {
@@ -505,6 +512,9 @@ void print_histogram(
   double *boundaries, *weights;
   struct bucket *bucket;
 
+  if (mp_flag & DHIST_MULTI_THREADED)
+    pthread_mutex_lock(&histogram->tree_mtx);
+
   weights = (double *)malloc(sizeof(double) * histogram->max_num_buckets);
   boundaries = (double *)malloc(
       sizeof(double) * (histogram->max_num_buckets + 1));
@@ -512,8 +522,8 @@ void print_histogram(
   generation = get_generation(histogram, false, mp_flag);
 
   bucket = histogram->root;
-  while (bucket->children[0])
-    bucket = bucket->children[0];
+  while (bucket->below)
+    bucket = bucket->below;
 
   idx = 0;
   while (1) {
@@ -528,6 +538,9 @@ void print_histogram(
     idx++;
   }
   num_buckets = idx;
+
+  if (mp_flag & DHIST_MULTI_THREADED)
+    pthread_mutex_unlock(&histogram->tree_mtx);
 
   printf("{");
   if (title)
@@ -784,6 +797,10 @@ void split_bucket(
 
   // TODO: This needs to check if it would exceed max_num_buckets. If so, it
   // needs ot first reclaim some old buckets.
+  if (histogram->num_buckets >= histogram->max_num_buckets) {
+    printf("TODO: delete buckets before splitting buckets.\n");
+    assert(0);
+  }
 
   if (mp_flag & DHIST_MULTI_THREADED)
     pthread_mutex_lock(&histogram->tree_mtx);
@@ -843,11 +860,10 @@ void split_bucket(
 
 void delete_bucket(
     struct decaying_histogram *histogram, struct bucket *bucket, int mp_flag) {
-  struct bucket *cursor, *attach, *lucky_bucket;
+  struct bucket *cursor, *attach, *lucky_bucket, *third_boundary_owner;
   int dir_from_parent, dir, balance;
   uint64_t generation;
   double below_count, above_count;
-  pthread_mutex_t *third_boundary_mtx;
 
  restart:
   if (mp_flag & DHIST_MULTI_THREADED)
@@ -879,20 +895,20 @@ void delete_bucket(
 
   // Now we need to extend our write lock to also cover the lucky bucket.
   if (lucky_bucket == bucket->below)
-    third_boundary_mtx = lucky_bucket->boundary_mtx;
+    third_boundary_owner = lucky_bucket;
   else if (lucky_bucket->above != NULL)
-    third_boundary_mtx = lucky_bucket->above->boundary_mtx;
+    third_boundary_owner = lucky_bucket->above;
   else
-    third_boundary_mtx = NULL;
+    third_boundary_owner = NULL;
 
   if (mp_flag & DHIST_MULTI_THREADED &&
-      third_boundary_mtx != NULL &&
-      pthread_mutex_trylock(third_boundary_mtx) != 0) {
+      third_boundary_owner != NULL &&
+      !trylock_boundary_succeeded(third_boundary_owner, mp_flag, __LINE__)) {
     // Nuts. It isn't available. Let's restart once it is available.
     release_write_lock(bucket, mp_flag);
     pthread_mutex_unlock(&histogram->tree_mtx);
-    pthread_mutex_lock(third_boundary_mtx);
-    pthread_mutex_unlock(third_boundary_mtx);
+    lock_boundary(third_boundary_owner, mp_flag, __LINE__);
+    unlock_boundary(third_boundary_owner, mp_flag);
     goto restart;
   }
 
@@ -910,15 +926,23 @@ void delete_bucket(
     if (lucky_bucket->below)
       lucky_bucket->below->above = lucky_bucket;
   }
-  if (mp_flag & DHIST_MULTI_THREADED)
-    pthread_mutex_unlock(third_boundary_mtx);
+  if (third_boundary_owner && (mp_flag & DHIST_MULTI_THREADED))
+    unlock_boundary(third_boundary_owner, mp_flag);
 
   if (bucket->children[0] == NULL || bucket->children[1] == NULL) {
-    dir_from_parent = (bucket->parent->children[1] == bucket);
     dir = (bucket->children[0] == NULL);
-    set_child(bucket->parent, bucket->children[dir], dir_from_parent);
-    attach = bucket->parent;
-    recycle_bucket(bucket, mp_flag);
+    if (bucket->parent == NULL) {
+      // We're dropping from two buckets back down to one bucket.
+      histogram->root = bucket->children[dir];
+      bucket->children[dir]->parent = NULL;
+      attach = histogram->root;
+      recycle_bucket(bucket, mp_flag);
+    } else {
+      dir_from_parent = (bucket->parent->children[1] == bucket);
+      set_child(bucket->parent, bucket->children[dir], dir_from_parent);
+      attach = bucket->parent;
+      recycle_bucket(bucket, mp_flag);
+    }
   } else {
     balance = compute_balance(bucket);
     dir = (balance <= 0);
