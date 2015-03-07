@@ -40,7 +40,7 @@
     (NUM_THREADS > 1 ? DHIST_MULTI_THREADED : DHIST_SINGLE_THREADED)
 #define FRAMES_PER_SECOND 5
 
-#define ANIMATE 0
+#define ANIMATE 1
 
 static struct decaying_histogram *g_histogram;
 

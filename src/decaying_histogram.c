@@ -40,7 +40,7 @@
 #endif
 
 #ifndef ABS
-#define ABS(x) ((x) < 0 ? -(x) : (x))
+#define ABS(x) ((x) >= 0 ? (x) : -(x))
 #endif
 
 static double ipow(double coefficient, uint64_t power);
@@ -73,7 +73,8 @@ static bool is_target_boundary(struct bucket *bucket, double observation);
 static void obtain_write_lock(struct bucket *bucket, int mp_flag, int line);
 static void release_write_lock(struct bucket *bucket, int mp_flag);
 static void lock_boundary(struct bucket *bucket, int mp_flag, int line);
-static bool trylock_boundary_succeeded(struct bucket *bucket, int mp_flag);
+static bool trylock_boundary_succeeded(
+    struct bucket *bucket, int mp_flag, int lint);
 static void unlock_boundary(struct bucket *bucket, int mp_flag);
 static uint64_t get_generation(
     struct decaying_histogram *histogram, bool increment, int mp_flag);
@@ -90,7 +91,7 @@ struct bucket * init_bucket(
       continue;
     if (mp_flag & DHIST_SINGLE_THREADED)
       break;
-    if (!trylock_boundary_succeeded(bucket, mp_flag))
+    if (!trylock_boundary_succeeded(bucket, mp_flag, __LINE__))
       continue;
     if (bucket->is_enabled) {
       // We raced or had a stale reference to bucket->is_enabled.
@@ -123,7 +124,6 @@ void recycle_bucket(struct bucket *bucket, int mp_flag) {
 void lock_boundary(struct bucket *bucket, int mp_flag, int line) {
   //printf("lock_boundary\n");
   if (mp_flag & DHIST_MULTI_THREADED) {
-    printf("here: %d\n", line);
     pthread_mutex_lock(bucket->boundary_mtx);
     assert(bucket->lock_held == false);
     bucket->lock_held = true;
@@ -131,14 +131,14 @@ void lock_boundary(struct bucket *bucket, int mp_flag, int line) {
   }
 }
 
-bool trylock_boundary_succeeded(struct bucket *bucket, int mp_flag) {
+bool trylock_boundary_succeeded(struct bucket *bucket, int mp_flag, int line) {
   if (mp_flag & DHIST_SINGLE_THREADED) {
     //printf("trylock_boundary\n");
     return true;
   } else if (pthread_mutex_trylock(bucket->boundary_mtx) == 0) {
-    //printf("trylock_boundary\n");
     assert(bucket->lock_held == false);
     bucket->lock_held = true;
+    bucket->line = line;
     return true;
   } else {
     return false;
@@ -464,7 +464,7 @@ void add_observation(
     } else if (observation < boundary) {
       // We need to insert into bucket->below. That bucket exists because we
       // would have created an artificial boundary if it didn't.
-      if (trylock_boundary_succeeded(bucket->below, mp_flag)) {
+      if (trylock_boundary_succeeded(bucket->below, mp_flag, __LINE__)) {
         add_succeeded = perform_add(
             histogram, bucket->below, observation, true, false, mp_flag);
         unlock_boundary(bucket->below, mp_flag);
@@ -780,8 +780,7 @@ void fix_balance(
 void split_bucket(
     struct decaying_histogram *histogram, struct bucket *bucket, int mp_flag) {
   double lower_bound, upper_bound, diameter, median;
-  struct bucket *new_bucket;
-  printf("> split_bucket\n");
+  struct bucket *new_bucket, *memo;
 
   // TODO: This needs to check if it would exceed max_num_buckets. If so, it
   // needs ot first reclaim some old buckets.
@@ -829,8 +828,10 @@ void split_bucket(
   new_bucket->above = bucket;
   if (new_bucket->below) {
     obtain_write_lock(new_bucket->below, mp_flag, __LINE__);
+    memo = new_bucket->below->above;
     new_bucket->below->above = new_bucket;
-    release_write_lock(new_bucket->below, mp_flag);
+    unlock_boundary(new_bucket->below, mp_flag);
+    unlock_boundary(memo, mp_flag);
   }
 
   set_child(new_bucket, bucket->children[0], 0);
@@ -847,7 +848,6 @@ void delete_bucket(
   uint64_t generation;
   double below_count, above_count;
   pthread_mutex_t *third_boundary_mtx;
-  printf("> delete_bucket\n");
 
  restart:
   if (mp_flag & DHIST_MULTI_THREADED)
@@ -965,8 +965,9 @@ void obtain_write_lock(struct bucket *bucket, int mp_flag, int line) {
   second = bucket->above;
   while (1) {
     lock_boundary(first, mp_flag, line);
-    if (trylock_boundary_succeeded(second, mp_flag))
+    if (trylock_boundary_succeeded(second, mp_flag, __LINE__)) {
       return;
+    }
     unlock_boundary(first, mp_flag);
     swap = first;
     first = second;
