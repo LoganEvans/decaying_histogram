@@ -42,7 +42,7 @@ extern "C" {
 
 struct bucket {
   double count;
-  volatile double mu;
+  double mu;
   uint64_t update_generation;
   struct bucket *below;
   struct bucket *above;
@@ -100,7 +100,6 @@ double Kolomogorov_Smirnov_statistic(
 void print_histogram(
     struct decaying_histogram *histogram, bool estimate_ok,
     const char *title, const char *xaxis, int mp_flag);
-bool is_target_boundary(struct bucket *bucket, double observation);
 
 int assert_invariant(struct bucket *root);
 int count_nodes(struct bucket *root);

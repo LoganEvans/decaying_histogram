@@ -68,6 +68,8 @@ static struct bucket * rotate_double(
     struct decaying_histogram *histogram, struct bucket *root, int dir);
 static int compute_balance(struct bucket *bucket);
 static void _print_tree(struct bucket *bucket, int depth);
+static void assert_consistent(struct decaying_histogram *histogram);
+static bool is_target_boundary(struct bucket *bucket, double observation);
 
 
 struct bucket * init_bucket(void) {
@@ -449,38 +451,27 @@ void print_histogram(
     generation = histogram->generation;
   }
 
-  if (histogram->root->children[0]) {
-    bucket = histogram->root->children[0];
-    while (bucket->children[1])
-      bucket = bucket->children[1];
-  } else {
-    bucket = histogram->root;
-  }
+  bucket = histogram->root;
+  while (bucket->children[0])
+    bucket = bucket->children[0];
 
   idx = 0;
   while (1) {
     if (mp_flag & DHIST_MULTI_THREADED) {
       pthread_mutex_lock(bucket->boundary_mtx);
       weights[idx] = weight(
-          histogram, bucket, generation, &boundaries[idx], NULL);
+          histogram, bucket, generation,
+          &boundaries[idx], &boundaries[idx + 1]);
       pthread_mutex_unlock(bucket->boundary_mtx);
     } else {
       weights[idx] = weight(
-          histogram, bucket, generation, &boundaries[idx], NULL);
+          histogram, bucket, generation,
+          &boundaries[idx], &boundaries[idx + 1]);
     }
     if (bucket->above == NULL)
       break;
     bucket = bucket->above;
     idx++;
-  }
-
-  if (mp_flag & DHIST_MULTI_THREADED) {
-    pthread_mutex_lock(bucket->boundary_mtx);
-    boundaries[idx] = compute_bound(histogram, bucket, NULL);
-    pthread_mutex_unlock(bucket->boundary_mtx);
-    pthread_rwlock_unlock(&histogram->rwlock);
-  } else {
-    boundaries[idx] = compute_bound(histogram, bucket, NULL);
   }
 
   printf("{");
@@ -763,8 +754,8 @@ void split_bucket(
     // a bucket again until this happens.
     new_bucket->mu = bucket->mu;
   } else {
-    lower_bound = compute_bound(histogram, left, new_bucket);
-    upper_bound = compute_bound(histogram, new_bucket, right);
+    lower_bound = compute_bound(histogram, new_bucket->below, bucket);
+    upper_bound = compute_bound(histogram, bucket, bucket->above);
     diameter = upper_bound - lower_bound;
     median = lower_bound + diameter / 2.0;
     new_bucket->mu = median - diameter / 6.0;
@@ -842,10 +833,10 @@ void delete_bucket(
 }
 
 void _print_tree(struct bucket *bucket, int depth) {
-  printf("%lf(%d)", bucket->mu, bucket->height);
+  printf("%.2lf", bucket->mu);
 
   if (bucket->children[0]) {
-    printf("\t >");
+    printf("\t  ");
     _print_tree(bucket->children[0], depth + 1);
   }
 
@@ -853,7 +844,7 @@ void _print_tree(struct bucket *bucket, int depth) {
     printf("\n");
     for (int i = 0; i < depth; i++)
       printf("\t");
-    printf("\t\\>");
+    printf("\t\\ ");
     _print_tree(bucket->children[1], depth + 1);
   }
 }
@@ -861,5 +852,32 @@ void _print_tree(struct bucket *bucket, int depth) {
 void print_tree(struct bucket *bucket) {
   _print_tree(bucket, 0);
   printf("\n");
+}
+
+void assert_consistent(struct decaying_histogram *histogram) {
+  double upper_bound, lower_bound;
+  struct bucket *cursor = histogram->root;
+  while (cursor->children[0])
+    cursor = cursor->children[0];
+
+  while (cursor != NULL) {
+    upper_bound = compute_bound(histogram, cursor, cursor->above);
+    lower_bound = compute_bound(histogram, cursor->below, cursor);
+    if (cursor->above && cursor->mu > cursor->above->mu) {
+      printf("ERROR: cursor->mu(%lf) > cursor->above->mu(%lf)\n",
+          cursor->mu, cursor->above->mu);
+      print_tree(histogram->root);
+      assert(0);
+    }
+    if (upper_bound < lower_bound) {
+      printf("ERROR: upper_bound(%lf) < lower_bound(%lf)\n",
+          upper_bound, lower_bound);
+      print_tree(histogram->root);
+      assert(0);
+    }
+    cursor = cursor->above;
+  }
+
+  assert_invariant(histogram->root);
 }
 
