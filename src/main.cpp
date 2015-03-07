@@ -33,14 +33,14 @@
 #include <random>
 
 #define NUM_BUCKETS 50
-#define NUM_THREADS 1
+#define NUM_THREADS 2
 #define ALPHA 0.000001
 #define CYCLES 1ULL * 1024 * 1024 * 1024
 #define DHIST_MP_FLAG \
     (NUM_THREADS > 1 ? DHIST_MULTI_THREADED : DHIST_SINGLE_THREADED)
 #define FRAMES_PER_SECOND 5
 
-#define ANIMATE 1
+#define ANIMATE 0
 
 static struct decaying_histogram *g_histogram;
 

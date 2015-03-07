@@ -61,6 +61,8 @@ struct bucket {
   // bucket while it is enabled, for another thread to recycle the bucket, and
   // then for the first thread to attempt to update the bucket.
   bool is_enabled;
+  bool lock_held;
+  int line;
 };
 
 struct decaying_histogram {
