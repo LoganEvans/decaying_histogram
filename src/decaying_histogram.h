@@ -41,15 +41,26 @@ extern "C" {
 #define DHIST_MULTI_THREADED  (1 << 1)
 
 struct bucket {
+  // The values for count, mu, update_generation and the below and above
+  // pointers are protected by bucket->boundary_mtx and
+  // bucket->above->boundary_mtx. If this thread holds either of those mutexes,
+  // these values cannot be modified by any other thread.
   double count;
   double mu;
   uint64_t update_generation;
   struct bucket *below;
   struct bucket *above;
+  // The parent and children pointers, height, and is_enabled fields are
+  // protected by tree_mtx.
   struct bucket *parent;
   struct bucket *children[2];
   pthread_mutex_t *boundary_mtx;  /* lower boundary */
   int height;
+  // The is_enabled field exists because the bucket lookup is not protected with
+  // any atomics, so it is possible for a thread to obtain a reference to this
+  // bucket while it is enabled, for another thread to recycle the bucket, and
+  // then for the first thread to attempt to update the bucket.
+  bool is_enabled;
 };
 
 struct decaying_histogram {
@@ -58,17 +69,20 @@ struct decaying_histogram {
   double alpha;
   uint64_t generation;
   struct bucket *root;
+  // The bucket_list is a pool of buckets that are allocated at initialization
+  // time. The length will be max_num_buckets.
+  struct bucket *bucket_list;
   uint32_t num_buckets;
   uint32_t max_num_buckets;
   double *pow_table;
-  pthread_rwlock_t rwlock;
-  pthread_mutex_t generation_mutex;
+  pthread_mutex_t tree_mtx;
+  pthread_mutex_t generation_mtx;
 };
 
 #define ABS_DIFF(x, y) (((x) - (y)) > 0 ? (x) - (y) : (y) - (x))
 
-struct bucket * init_bucket(void);
-void destroy_bucket(struct bucket *bucket);
+struct bucket * init_bucket(struct decaying_histogram *histogram, int mp_flag);
+void recycle_bucket(struct bucket *bucket, int mp_flag);
 void init_decaying_histogram(
     struct decaying_histogram *histogram, int target_buckets,
     double alpha);
@@ -103,9 +117,10 @@ void print_histogram(
 
 int assert_invariant(struct bucket *root);
 int count_nodes(struct bucket *root);
-void split_bucket(struct decaying_histogram *histogram, struct bucket *bucket);
+void split_bucket(
+    struct decaying_histogram *histogram, struct bucket *bucket, int mp_flag);
 void delete_bucket(
-    struct decaying_histogram *histogram, struct bucket *bucket);
+    struct decaying_histogram *histogram, struct bucket *bucket, int mp_flag);
 void print_tree(struct bucket *bucket);
 
 #ifdef __cplusplus

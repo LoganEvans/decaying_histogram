@@ -70,24 +70,50 @@ static int compute_balance(struct bucket *bucket);
 static void _print_tree(struct bucket *bucket, int depth);
 static void assert_consistent(struct decaying_histogram *histogram);
 static bool is_target_boundary(struct bucket *bucket, double observation);
+static void obtain_write_lock(struct bucket *bucket, int mp_flag);
+static void release_write_lock(struct bucket *bucket, int mp_flag);
 
 
-struct bucket * init_bucket(void) {
+struct bucket * init_bucket(
+    struct decaying_histogram *histogram, int mp_flag) {
   struct bucket * bucket;
+  int idx;
 
-  bucket = (struct bucket *)malloc(sizeof(struct bucket));
-  memset(bucket, 0, sizeof(struct bucket));
-  bucket->height = 1;
-  bucket->boundary_mtx =
-    (pthread_mutex_t *)malloc(sizeof(pthread_mutex_t));
-  pthread_mutex_init(bucket->boundary_mtx, NULL);
+  for (idx = 0; idx < histogram->max_num_buckets; idx++) {
+    bucket = &histogram->bucket_list[idx];
+    if (bucket->is_enabled)
+      continue;
+    if (mp_flag & DHIST_SINGLE_THREADED)
+      break;
+    if (pthread_mutex_trylock(bucket->boundary_mtx) != 0)
+      continue;
+    if (bucket->is_enabled) {
+      // We raced or had a stale reference to bucket->is_enabled.
+      pthread_mutex_unlock(bucket->boundary_mtx);
+      continue;
+    }
+    break;
+  }
+
+  bucket->is_enabled = true;
+  bucket->count = 0.0;
+  bucket->mu = 0.0;
+  bucket->update_generation = 0;
+  bucket->below = NULL;
+  bucket->above = NULL;
+  bucket->parent = NULL;
+  bucket->children[0] = NULL;
+  bucket->children[1] = NULL;
+  bucket->height = NULL;
+  if (mp_flag & DHIST_MULTI_THREADED)
+    pthread_mutex_unlock(bucket->boundary_mtx);
 
   return bucket;
 }
 
-void destroy_bucket(struct bucket *bucket) {
-  free(bucket->boundary_mtx);
-  free(bucket);
+void recycle_bucket(struct bucket *bucket, int mp_flag) {
+  bucket->is_enabled = false;
+  release_write_lock(bucket, mp_flag);
 }
 
 /*
@@ -238,22 +264,22 @@ bool perform_add(
     boundary = compute_bound(histogram, bucket->below, bucket);
     if (observation < boundary) {
       if (mp_flag & DHIST_MULTI_THREADED)
-        pthread_mutex_unlock(&histogram->generation_mutex);
+        pthread_mutex_unlock(&histogram->generation_mtx);
       return false;
     }
   } else if (recheck_right_boundary) {
     boundary = compute_bound(histogram, bucket, bucket->above);
     if (boundary < observation) {
       if (mp_flag & DHIST_MULTI_THREADED)
-        pthread_mutex_unlock(&histogram->generation_mutex);
+        pthread_mutex_unlock(&histogram->generation_mtx);
       return false;
     }
   }
 
   if (mp_flag & DHIST_MULTI_THREADED) {
-    pthread_mutex_lock(&histogram->generation_mutex);
+    pthread_mutex_lock(&histogram->generation_mtx);
     update_generation = ++histogram->generation;
-    pthread_mutex_unlock(&histogram->generation_mutex);
+    pthread_mutex_unlock(&histogram->generation_mtx);
   } else {
     update_generation = ++histogram->generation;
   }
@@ -271,6 +297,7 @@ void init_decaying_histogram(
     struct decaying_histogram *histogram, int target_buckets, double alpha) {
   double max_total_count, expected_count;
   uint64_t idx;
+  struct bucket *bucket;
 
   max_total_count = 1.0 / alpha;
   expected_count = 1.0 / (alpha * target_buckets);
@@ -279,10 +306,20 @@ void init_decaying_histogram(
   histogram->delete_bucket_threshold = expected_count * (1.0 / 4.0);
   histogram->split_bucket_threshold = expected_count * (7.0 / 4.0);
   histogram->alpha = alpha;
-  histogram->max_num_buckets = 2 *
+  histogram->max_num_buckets =
       (uint32_t)CEIL(max_total_count, histogram->delete_bucket_threshold);
+  histogram->bucket_list = (struct bucket *)malloc(
+      histogram->max_num_buckets * sizeof(struct bucket));
+  for (idx = 0; idx < histogram->max_num_buckets; idx++) {
+    bucket = &histogram->bucket_list[idx];
+    bucket->is_enabled = false;
+    bucket->boundary_mtx =
+      (pthread_mutex_t *)malloc(sizeof(pthread_mutex_t));
+    pthread_mutex_init(bucket->boundary_mtx, NULL);
+  }
 
-  histogram->root = init_bucket();
+  // We're single threaded in initialization.
+  histogram->root = init_bucket(histogram, DHIST_SINGLE_THREADED);
   histogram->num_buckets = 1;
 
   histogram->generation = 0;
@@ -292,8 +329,8 @@ void init_decaying_histogram(
   for (idx = 0; idx < histogram->max_num_buckets; idx++)
     histogram->pow_table[idx] = ipow(1.0 - alpha, idx);
 
-  pthread_rwlock_init(&histogram->rwlock, NULL);
-  pthread_mutex_init(&histogram->generation_mutex, NULL);
+  pthread_mutex_init(&histogram->tree_mtx, NULL);
+  pthread_mutex_init(&histogram->generation_mtx, NULL);
 
   return;
 }
@@ -358,7 +395,7 @@ void add_observation(
   double boundary;
 
   if (mp_flag & DHIST_MULTI_THREADED)
-    pthread_rwlock_rdlock(&histogram->rwlock);
+    pthread_mutex_lock(&histogram->tree_mtx);
 
   do {
     bucket = find_bucket(histogram, observation, mp_flag);
@@ -411,14 +448,14 @@ void add_observation(
   } while (!add_succeeded);
 
   if (mp_flag & DHIST_MULTI_THREADED)
-      pthread_rwlock_unlock(&histogram->rwlock);
+    pthread_mutex_unlock(&histogram->tree_mtx);
 
   if (bucket->count < histogram->delete_bucket_threshold &&
       histogram->num_buckets > 1) {
-    delete_bucket(histogram, bucket);
+    delete_bucket(histogram, bucket, mp_flag);
   }
   if (bucket->count > histogram->split_bucket_threshold) {
-    split_bucket(histogram, bucket);
+    split_bucket(histogram, bucket, mp_flag);
   }
 }
 
@@ -430,23 +467,14 @@ void print_histogram(
   double *boundaries, *weights;
   struct bucket *bucket;
 
-  if (mp_flag & DHIST_SINGLE_THREADED) {
-    /* pass */
-  } else if (!estimate_ok) {
-    pthread_rwlock_wrlock(&histogram->rwlock);
-  } else {
-    pthread_rwlock_rdlock(&histogram->rwlock);
-  }
-
-  // XXX
-  num_buckets = histogram->num_buckets;
-  weights = (double *)malloc(sizeof(double) * num_buckets);
-  boundaries = (double *)malloc(sizeof(double) * (num_buckets + 1));
+  weights = (double *)malloc(sizeof(double) * histogram->max_num_buckets);
+  boundaries = (double *)malloc(
+      sizeof(double) * (histogram->max_num_buckets + 1));
 
   if (mp_flag & DHIST_MULTI_THREADED) {
-    pthread_mutex_lock(&histogram->generation_mutex);
+    pthread_mutex_lock(&histogram->generation_mtx);
     generation = histogram->generation;
-    pthread_mutex_unlock(&histogram->generation_mutex);
+    pthread_mutex_unlock(&histogram->generation_mtx);
   } else {
     generation = histogram->generation;
   }
@@ -473,6 +501,7 @@ void print_histogram(
     bucket = bucket->above;
     idx++;
   }
+  num_buckets = idx;
 
   printf("{");
   if (title)
@@ -723,27 +752,31 @@ void fix_balance(
 }
 
 void split_bucket(
-    struct decaying_histogram *histogram, struct bucket *bucket) {
+    struct decaying_histogram *histogram, struct bucket *bucket, int mp_flag) {
   double lower_bound, upper_bound, diameter, median;
-  struct bucket *left, *right;
   struct bucket *new_bucket;
 
-  new_bucket = init_bucket();
+  // TODO: This needs to check if it would exceed max_num_buckets. If so, it
+  // needs ot first reclaim some old buckets.
+
+  pthread_mutex_lock(&histogram->tree_mtx);
+  obtain_write_lock(bucket, mp_flag);
+  if (bucket->count <= histogram->split_bucket_threshold) {
+    // We raced and lost.
+    release_write_lock(bucket, mp_flag);
+    pthread_mutex_unlock(&histogram->tree_mtx);
+    return;
+  }
+
+  new_bucket = init_bucket(histogram, mp_flag);
   ++histogram->num_buckets;
   new_bucket->parent = bucket;
 
   bucket->count /= 2.0;
   new_bucket->count = bucket->count;
   new_bucket->update_generation = bucket->update_generation;
-
   new_bucket->below = bucket->below;
-  new_bucket->above = bucket;
-  left = new_bucket->below;
-  // XXX
-  if (left)
-    left->above = new_bucket;
-  right = new_bucket->above;
-  right->below = new_bucket;
+  bucket->below = new_bucket;
 
   if (histogram->num_buckets == 2) {
     // This is an awkward split because we don't have enough information to
@@ -761,29 +794,81 @@ void split_bucket(
     new_bucket->mu = median - diameter / 6.0;
     bucket->mu = median + diameter / 6.0;
   }
+  release_write_lock(bucket, mp_flag);
+
+  new_bucket->above = bucket;
+  if (new_bucket->below) {
+    obtain_write_lock(new_bucket->below, mp_flag);
+    new_bucket->below->above = new_bucket;
+    release_write_lock(new_bucket->below, mp_flag);
+  }
 
   set_child(new_bucket, bucket->children[0], 0);
   set_child(bucket, new_bucket, 0);
 
   fix_balance(histogram, new_bucket, true);
+  pthread_mutex_unlock(&histogram->tree_mtx);
 }
 
 void delete_bucket(
-    struct decaying_histogram *histogram, struct bucket *bucket) {
+    struct decaying_histogram *histogram, struct bucket *bucket, int mp_flag) {
   struct bucket *cursor, *attach, *lucky_bucket;
   int dir_from_parent, dir, balance;
+  uint64_t generation;
+  double below_count, above_count;
+  pthread_mutex_t *third_boundary_mtx;
 
-  decay(histogram, bucket->below, histogram->generation);
-  decay(histogram, bucket->above, histogram->generation);
+ restart:
+  if (mp_flag & DHIST_MULTI_THREADED)
+    pthread_mutex_lock(&histogram->tree_mtx);
+  obtain_write_lock(bucket, mp_flag);
+  if (bucket->count >= histogram->delete_bucket_threshold ||
+      histogram->num_buckets == 1) {
+    // We raced and lost.
+    release_write_lock(bucket, mp_flag);
+    pthread_mutex_unlock(&histogram->tree_mtx);
+    return;
+  }
+
+  if (mp_flag & DHIST_MULTI_THREADED) {
+    pthread_mutex_lock(&histogram->generation_mtx);
+    generation = histogram->generation;
+    pthread_mutex_unlock(&histogram->generation_mtx);
+  } else {
+    generation = histogram->generation;
+  }
 
   if (bucket->below == NULL) {
     lucky_bucket = bucket->above;
   } else if (bucket->above == NULL) {
     lucky_bucket = bucket->below;
-  } else if (bucket->below->count < bucket->above->count) {
-    lucky_bucket = bucket->below;
   } else {
-    lucky_bucket = bucket->above;
+    below_count = compute_count(histogram, bucket->below, generation);
+    above_count = compute_count(histogram, bucket->above, generation);
+    if (below_count < above_count) {
+      lucky_bucket = bucket->below;
+    } else {
+      lucky_bucket = bucket->above;
+    }
+  }
+
+  // Now we need to extend our write lock to also cover the lucky bucket.
+  if (lucky_bucket == bucket->below)
+    third_boundary_mtx = lucky_bucket->boundary_mtx;
+  else if (lucky_bucket->above != NULL)
+    third_boundary_mtx = lucky_bucket->above->boundary_mtx;
+  else
+    third_boundary_mtx = NULL;
+
+  if (mp_flag & DHIST_MULTI_THREADED &&
+      third_boundary_mtx != NULL &&
+      pthread_mutex_trylock(third_boundary_mtx) != 0) {
+    // Nuts. It isn't available. Let's restart once it is available.
+    release_write_lock(bucket, mp_flag);
+    pthread_mutex_unlock(&histogram->tree_mtx);
+    pthread_mutex_lock(third_boundary_mtx);
+    pthread_mutex_unlock(third_boundary_mtx);
+    goto restart;
   }
 
   lucky_bucket->mu =
@@ -800,12 +885,15 @@ void delete_bucket(
     if (lucky_bucket->below)
       lucky_bucket->below->above = lucky_bucket;
   }
+  if (mp_flag & DHIST_MULTI_THREADED)
+    pthread_mutex_unlock(third_boundary_mtx);
 
   if (bucket->children[0] == NULL || bucket->children[1] == NULL) {
     dir_from_parent = (bucket->parent->children[1] == bucket);
     dir = (bucket->children[0] == NULL);
     set_child(bucket->parent, bucket->children[dir], dir_from_parent);
     attach = bucket->parent;
+    recycle_bucket(bucket, mp_flag);
   } else {
     balance = compute_balance(bucket);
     dir = (balance <= 0);
@@ -817,19 +905,56 @@ void delete_bucket(
     if (bucket->parent == NULL) {
       histogram->root = bucket->children[dir];
       bucket->children[dir]->parent = NULL;
+      recycle_bucket(bucket, mp_flag);
       fix_height(histogram->root);
     } else {
       dir_from_parent = (bucket->parent->children[1] == bucket);
       cursor = bucket->children[dir];
       cursor->parent = bucket->parent;
+      recycle_bucket(bucket, mp_flag);
       cursor->parent->children[dir_from_parent] = cursor;
       fix_height(cursor->parent);
     }
   }
   fix_balance(histogram, attach, true);
 
-  destroy_bucket(bucket);
   --histogram->num_buckets;
+
+  if (mp_flag & DHIST_MULTI_THREADED)
+    pthread_mutex_unlock(&histogram->tree_mtx);
+}
+
+// This is only safe if histogram->tree_mtx is held.
+void obtain_write_lock(struct bucket *bucket, int mp_flag) {
+  pthread_mutex_t *first, *second, *swap;
+
+  if (mp_flag & DHIST_SINGLE_THREADED)
+    return;
+
+  if (bucket->above == NULL) {
+    pthread_mutex_lock(bucket->boundary_mtx);
+    return;
+  }
+
+  first = bucket->boundary_mtx;
+  second = bucket->above->boundary_mtx;
+  while (1) {
+    pthread_mutex_lock(first);
+    if (pthread_mutex_trylock(second) == 0)
+      return;
+    pthread_mutex_unlock(first);
+    swap = first;
+    first = second;
+    second = swap;
+  }
+}
+
+void release_write_lock(struct bucket *bucket, int mp_flag) {
+  if (mp_flag & DHIST_SINGLE_THREADED)
+    return;
+  pthread_mutex_unlock(bucket->boundary_mtx);
+  if (bucket->above)
+    pthread_mutex_unlock(bucket->above->boundary_mtx);
 }
 
 void _print_tree(struct bucket *bucket, int depth) {
