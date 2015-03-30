@@ -68,7 +68,7 @@ thread_func(void *args) {
   while (last_timestamp < stop_timestamp) {
 #endif
     this_timestamp = rdtsc();
-    add_observation(
+    dh_insert(
         g_histogram, log2(this_timestamp - last_timestamp), DHIST_MP_FLAG);
     last_timestamp = this_timestamp;
   }

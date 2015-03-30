@@ -114,7 +114,7 @@ TEST_F(HistogramTest, PositiveDensity) {
 
   for (int idx = 0; idx < 1000; idx++) {
     observation = g_normal(g_generator);
-    add_observation(histogram_, observation, DHIST_SINGLE_THREADED);
+    dh_insert(histogram_, observation, DHIST_SINGLE_THREADED);
     //if (histogram_->num_buckets > 1)
     //  FAIL() << histogram_->bucket_list[0].lower_bound << " | " << histogram_->bucket_list[0].upper_bound
     //         << " ; " << histogram_->bucket_list[1].lower_bound << " | " << histogram_->bucket_list[1].upper_bound << endl;
@@ -131,7 +131,7 @@ TEST_F(HistogramTest, DensitySumsToOne) {
   double observation, acc, dens, lower_bound, upper_bound;
 
   for (int idx = 0; idx < 1000000; idx++)
-    add_observation(histogram_, g_normal(g_generator), DHIST_SINGLE_THREADED);
+    dh_insert(histogram_, g_normal(g_generator), DHIST_SINGLE_THREADED);
 
   for (int idx = 0; idx < histogram_->num_buckets; idx++) {
     decay(histogram_, histogram_->bucket_list[idx], histogram_->generation);
@@ -154,7 +154,7 @@ TEST_F(HistogramTest, TotalCount) {
   for (int idx = 0; idx < 1000; idx++) {
     count *= (1.0 - alpha_);
     count += 1.0;
-    add_observation(histogram_, g_normal(g_generator), DHIST_SINGLE_THREADED);
+    dh_insert(histogram_, g_normal(g_generator), DHIST_SINGLE_THREADED);
   }
 
   EXPECT_LT(0, histogram_->num_buckets);

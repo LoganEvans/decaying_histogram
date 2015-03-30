@@ -63,6 +63,7 @@ struct bucket {
   bool is_enabled;
   bool lock_held;
   int line;
+  int unlock_line;
 };
 
 struct decaying_histogram {
@@ -84,12 +85,11 @@ struct decaying_histogram {
 #define ABS_DIFF(x, y) (((x) - (y)) > 0 ? (x) - (y) : (y) - (x))
 
 struct bucket * init_bucket(struct decaying_histogram *histogram, int mp_flag);
-void recycle_bucket(struct bucket *bucket, int mp_flag);
 void init_decaying_histogram(
     struct decaying_histogram *histogram, int target_buckets,
     double alpha);
 void clean_decaying_histogram(struct decaying_histogram *histogram);
-void add_observation(
+void dh_insert(
     struct decaying_histogram *histogram, double observation, int mp_flag);
 /*
  * This returns the bucket with the greatest mu less than observation (which is
