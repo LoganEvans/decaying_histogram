@@ -44,8 +44,7 @@
 
 static struct decaying_histogram *g_histogram;
 
-static uint64_t rdtsc()
-{
+static uint64_t rdtsc() {
   uint32_t hi, lo;
 
   __asm__ __volatile__ ("rdtsc" : "=a"(lo), "=d"(hi));
