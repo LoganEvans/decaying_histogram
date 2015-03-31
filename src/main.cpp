@@ -35,12 +35,14 @@
 #define NUM_BUCKETS 50
 #define NUM_THREADS 2
 #define ALPHA 0.000001
-#define CYCLES ((uint64_t)(20 * 2.397 * 1024 * 1024 * 1024))
+
+// 2.397 * 1024 * 1024 * 1024 is roughly the number of cycles in a second.
+#define CYCLES ((uint64_t)(1 * 2.397 * 1024 * 1024 * 1024))
 #define DHIST_MP_FLAG \
     (NUM_THREADS > 1 ? DHIST_MULTI_THREADED : DHIST_SINGLE_THREADED)
 #define FRAMES_PER_SECOND 5
 
-#define ANIMATE 1
+#define ANIMATE 0
 
 static struct decaying_histogram *g_histogram;
 

@@ -29,8 +29,6 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
-// XXX
-#include <math.h>
 
 #include "decaying_histogram.h"
 
@@ -68,12 +66,11 @@ static int compute_balance(struct bucket *bucket);
 static void _print_tree(struct bucket *bucket, int depth);
 static void assert_consistent(struct decaying_histogram *histogram);
 static bool is_target_boundary(struct bucket *bucket, double observation);
-static void obtain_write_lock(struct bucket *bucket, int mp_flag, int line);
-static void release_write_lock(struct bucket *bucket, int mp_flag, int line);
-static void lock_boundary(struct bucket *bucket, int mp_flag, int line);
-static bool trylock_boundary_succeeded(
-    struct bucket *bucket, int mp_flag, int lint);
-static void unlock_boundary(struct bucket *bucket, int mp_flag, int line);
+static void obtain_write_lock(struct bucket *bucket, int mp_flag);
+static void release_write_lock(struct bucket *bucket, int mp_flag);
+static void lock_boundary(struct bucket *bucket, int mp_flag);
+static bool trylock_boundary_succeeded(struct bucket *bucket, int mp_flag);
+static void unlock_boundary(struct bucket *bucket, int mp_flag);
 static uint64_t get_generation(
     struct decaying_histogram *histogram, bool increment, int mp_flag);
 static void _split_bucket(
@@ -81,33 +78,25 @@ static void _split_bucket(
 static void _delete_bucket(
     struct decaying_histogram *histogram, struct bucket *bucket, int mp_flag);
 
-static uint64_t gettid(void);
-
-uint64_t gettid(void) {
-  return syscall(SYS_gettid);
-}
-
 
 struct bucket * init_bucket(
     struct decaying_histogram *histogram, int mp_flag) {
   struct bucket *bucket = NULL;
-  int idx;
+  uint32_t idx;
 
   for (idx = 0; idx < histogram->max_num_buckets; idx++) {
     bucket = &histogram->bucket_list[idx];
     if (bucket->is_enabled)
       continue;
-    if (!trylock_boundary_succeeded(bucket, mp_flag, __LINE__))
+    if (!trylock_boundary_succeeded(bucket, mp_flag))
       continue;
     if (bucket->is_enabled) {
       // We raced or had a stale reference to bucket->is_enabled.
-      unlock_boundary(bucket, mp_flag, __LINE__);
+      unlock_boundary(bucket, mp_flag);
       continue;
     }
     break;
   }
-
-  memset(bucket->lock_log, 0, LOCK_LOG_LEN * sizeof(struct lock_log));
 
   bucket->is_enabled = true;
   bucket->count = 0.0;
@@ -119,59 +108,33 @@ struct bucket * init_bucket(
   bucket->children[0] = NULL;
   bucket->children[1] = NULL;
   bucket->height = 1;
-  unlock_boundary(bucket, mp_flag, __LINE__);
+  unlock_boundary(bucket, mp_flag);
 
   return bucket;
 }
 
-void lock_boundary(struct bucket *bucket, int mp_flag, int line) {
+void lock_boundary(struct bucket *bucket, int mp_flag) {
   if (mp_flag & DHIST_MULTI_THREADED) {
     pthread_mutex_lock(bucket->boundary_mtx);
-    assert(bucket->lock_held == false);
     bucket->lock_held = true;
-
-    memmove(bucket->lock_log, bucket->lock_log + 1,
-        sizeof(struct lock_log) * (LOCK_LOG_LEN - 1));
-    bucket->lock_log[LOCK_LOG_LEN - 1].tid = gettid();
-    bucket->lock_log[LOCK_LOG_LEN - 1].line = line;
-    bucket->lock_log[LOCK_LOG_LEN - 1].event = "lock_boundary";
   }
 }
 
-bool trylock_boundary_succeeded(struct bucket *bucket, int mp_flag, int line) {
+bool trylock_boundary_succeeded(struct bucket *bucket, int mp_flag) {
   if (mp_flag & DHIST_SINGLE_THREADED) {
     return true;
   } else if (pthread_mutex_trylock(bucket->boundary_mtx) == 0) {
-    assert(bucket->lock_held == false);
     bucket->lock_held = true;
-
-    memmove(bucket->lock_log, bucket->lock_log + 1,
-        sizeof(struct lock_log) * (LOCK_LOG_LEN - 1));
-    bucket->lock_log[LOCK_LOG_LEN - 1].tid = gettid();
-    bucket->lock_log[LOCK_LOG_LEN - 1].line = line;
-    bucket->lock_log[LOCK_LOG_LEN - 1].event = "trylock_boundary succeeded";
     return true;
   } else {
-    memmove(bucket->lock_log, bucket->lock_log + 1,
-        sizeof(struct lock_log) * (LOCK_LOG_LEN - 1));
-    bucket->lock_log[LOCK_LOG_LEN - 1].tid = gettid();
-    bucket->lock_log[LOCK_LOG_LEN - 1].line = line;
-    bucket->lock_log[LOCK_LOG_LEN - 1].event = "trylock_boundary failed";
     return false;
   }
 }
 
-void unlock_boundary(struct bucket *bucket, int mp_flag, int line) {
+void unlock_boundary(struct bucket *bucket, int mp_flag) {
   //printf("unlock_boundary\n");
   if (mp_flag & DHIST_MULTI_THREADED) {
-    assert(bucket->lock_held == true);
     bucket->lock_held = false;
-
-    memmove(bucket->lock_log, bucket->lock_log + 1,
-        sizeof(struct lock_log) * (LOCK_LOG_LEN - 1));
-    bucket->lock_log[LOCK_LOG_LEN - 1].tid = gettid();
-    bucket->lock_log[LOCK_LOG_LEN - 1].line = line;
-    bucket->lock_log[LOCK_LOG_LEN - 1].event = "unlock_boundary";
     pthread_mutex_unlock(bucket->boundary_mtx);
   }
 }
@@ -374,7 +337,7 @@ void init_decaying_histogram(
   expected_count = 1.0 / (alpha * target_buckets);
 
   // TODO: What are good thresholds?
-  radius = 0.01;
+  radius = 0.8;
   histogram->delete_bucket_threshold = expected_count * (1.0 - radius);
   histogram->split_bucket_threshold = expected_count * (1.0 + radius);
   histogram->alpha = alpha;
@@ -438,11 +401,11 @@ struct bucket * find_bucket(
           // There is nothing to race against.
           return bucket;
         } else {
-          lock_boundary(bucket, mp_flag, __LINE__);
+          lock_boundary(bucket, mp_flag);
 
           if (!is_target_boundary(bucket, observation) || !bucket->is_enabled) {
             // We raced, so restart.
-            unlock_boundary(bucket, mp_flag, __LINE__);
+            unlock_boundary(bucket, mp_flag);
             bucket = histogram->root;
           } else {
             return bucket;
@@ -463,7 +426,6 @@ void dh_insert(
   struct bucket *bucket;
   bool add_succeeded;
   double boundary;
-  struct bucket *debug_a, *debug_b, *debug_c;
 
   do {
     bucket = find_bucket(histogram, observation, mp_flag);
@@ -490,20 +452,20 @@ void dh_insert(
     } else if (observation < boundary) {
       // We need to insert into bucket->below. That bucket exists because we
       // would have created an artificial boundary if it didn't.
-      if (trylock_boundary_succeeded(bucket->below, mp_flag, __LINE__)) {
+      if (trylock_boundary_succeeded(bucket->below, mp_flag)) {
         add_succeeded = perform_add(
             histogram, bucket->below, observation, true, false, mp_flag);
-        unlock_boundary(bucket->below, mp_flag, __LINE__);
+        unlock_boundary(bucket->below, mp_flag);
       } else {
         add_succeeded = false;
       }
-    } else if (debug_a = bucket->above) {
+    } else if (bucket->above) {
       // We need to insert into this bucket, and since we have a neighbor to
       // the right, we need to extend our lock.
-      lock_boundary(debug_b = bucket->above, mp_flag, __LINE__);
+      lock_boundary(bucket->above, mp_flag);
       add_succeeded = perform_add(
           histogram, bucket, observation, false, true, mp_flag);
-      unlock_boundary(debug_c = bucket->above, mp_flag, __LINE__);
+      unlock_boundary(bucket->above, mp_flag);
     } else {
       // No bucket exists to the right, and since we already have the boundary
       // mutex for this bucket, nothing else can add a bucket to the right.
@@ -511,7 +473,7 @@ void dh_insert(
           histogram, bucket, observation, false, false, mp_flag);
     }
 
-    unlock_boundary(bucket, mp_flag, __LINE__);
+    unlock_boundary(bucket, mp_flag);
   } while (!add_succeeded);
 
   if (bucket->count < histogram->delete_bucket_threshold &&
@@ -523,6 +485,7 @@ void dh_insert(
   }
 }
 
+// XXX Implement estimate_ok
 void print_histogram(
     struct decaying_histogram *histogram, bool estimate_ok,
     const char *title, const char *xlabel, int mp_flag) {
@@ -546,11 +509,11 @@ void print_histogram(
 
   idx = 0;
   while (1) {
-    lock_boundary(bucket, mp_flag, __LINE__);
+    lock_boundary(bucket, mp_flag);
     weights[idx] = weight(
         histogram, bucket, generation,
         &boundaries[idx], &boundaries[idx + 1]);
-    unlock_boundary(bucket, mp_flag, __LINE__);
+    unlock_boundary(bucket, mp_flag);
     if (bucket->above == NULL)
       break;
     bucket = bucket->above;
@@ -848,16 +811,15 @@ void _split_bucket(
     }
   }
 
-  obtain_write_lock(bucket, mp_flag, __LINE__);
+  obtain_write_lock(bucket, mp_flag);
   if (bucket->count <= histogram->split_bucket_threshold) {
     // We raced and lost.
-    release_write_lock(bucket, mp_flag, __LINE__);
+    release_write_lock(bucket, mp_flag);
     return;
   }
 
   new_bucket = init_bucket(histogram, mp_flag);
   ++histogram->num_buckets;
-  assert(bucket != new_bucket);
   new_bucket->parent = bucket;
 
   bucket->count /= 2.0;
@@ -882,15 +844,15 @@ void _split_bucket(
     new_bucket->mu = median - diameter / 6.0;
     bucket->mu = median + diameter / 6.0;
   }
-  release_write_lock(bucket, mp_flag, __LINE__);
+  release_write_lock(bucket, mp_flag);
 
   new_bucket->above = bucket;
   if (new_bucket->below) {
-    obtain_write_lock(new_bucket->below, mp_flag, __LINE__);
+    obtain_write_lock(new_bucket->below, mp_flag);
     memo = new_bucket->below->above;
     new_bucket->below->above = new_bucket;
-    unlock_boundary(new_bucket->below, mp_flag, __LINE__);
-    unlock_boundary(memo, mp_flag, __LINE__);
+    unlock_boundary(new_bucket->below, mp_flag);
+    unlock_boundary(memo, mp_flag);
   }
 
   set_child(new_bucket, bucket->children[0], 0);
@@ -904,10 +866,8 @@ void delete_bucket(
   if (mp_flag & DHIST_MULTI_THREADED)
     pthread_mutex_lock(&histogram->tree_mtx);
 
-  assert_consistent(histogram);
   if (bucket->is_enabled)
     _delete_bucket(histogram, bucket, mp_flag);
-  assert_consistent(histogram);
 
   if (mp_flag & DHIST_MULTI_THREADED)
     pthread_mutex_unlock(&histogram->tree_mtx);
@@ -915,21 +875,18 @@ void delete_bucket(
 
 void _delete_bucket(
     struct decaying_histogram *histogram, struct bucket *bucket, int mp_flag) {
-  struct bucket *attach, *lucky_bucket, *far_left, *other;
+  struct bucket *attach, *lucky_bucket, *other;
   struct bucket *far_buckets[2];
   int dir_from_parent, dir, balance, idx;
   uint64_t generation;
   double below_count, above_count;
-  struct bucket *orig_below, *orig_above;
 
  restart:
-  obtain_write_lock(bucket, mp_flag, __LINE__);
-  orig_below = bucket->below;
-  orig_above = bucket->above;
+  obtain_write_lock(bucket, mp_flag);
   if (bucket->count >= histogram->delete_bucket_threshold ||
       histogram->num_buckets == 1) {
     // We raced and lost.
-    release_write_lock(bucket, mp_flag, __LINE__);
+    release_write_lock(bucket, mp_flag);
     return;
   }
 
@@ -961,13 +918,13 @@ void _delete_bucket(
   if (mp_flag & DHIST_MULTI_THREADED) {
     for (idx = 0; idx <= 1; idx++) {
       if (far_buckets[idx] != NULL &&
-          !trylock_boundary_succeeded(far_buckets[idx], mp_flag, __LINE__)) {
+          !trylock_boundary_succeeded(far_buckets[idx], mp_flag)) {
         // Nuts. It isn't available. Let's restart once it is available.
-        if (idx == 1)
-          unlock_boundary(far_buckets[0], mp_flag, __LINE__);
-        release_write_lock(bucket, mp_flag, __LINE__);
-        lock_boundary(far_buckets[idx], mp_flag, __LINE__);
-        unlock_boundary(far_buckets[idx], mp_flag, __LINE__);
+        if (idx == 1 && far_buckets[0])
+          unlock_boundary(far_buckets[0], mp_flag);
+        release_write_lock(bucket, mp_flag);
+        lock_boundary(far_buckets[idx], mp_flag);
+        unlock_boundary(far_buckets[idx], mp_flag);
         goto restart;
       }
     }
@@ -990,7 +947,7 @@ void _delete_bucket(
   if (mp_flag & DHIST_MULTI_THREADED) {
     for (idx = 0; idx <= 1; idx++) {
       if (far_buckets[idx])
-        unlock_boundary(far_buckets[idx], mp_flag, __LINE__);
+        unlock_boundary(far_buckets[idx], mp_flag);
     }
   }
 
@@ -1039,9 +996,6 @@ void _delete_bucket(
   if (attach)
     fix_balance(histogram, attach, true);
 
-  assert(orig_below == bucket->below);
-  assert(orig_above == bucket->above);
-
   // Return bucket to the pool.
   other = bucket->above;
   bucket->below = bucket->above = NULL;
@@ -1049,46 +1003,46 @@ void _delete_bucket(
   bucket->is_enabled = false;
 
   if (mp_flag & DHIST_MULTI_THREADED) {
-    unlock_boundary(bucket, mp_flag, __LINE__);
+    unlock_boundary(bucket, mp_flag);
     if (other)
-      unlock_boundary(other, mp_flag, __LINE__);
+      unlock_boundary(other, mp_flag);
   }
 
   --histogram->num_buckets;
 }
 
 // This is only safe if histogram->tree_mtx is held.
-void obtain_write_lock(struct bucket *bucket, int mp_flag, int line) {
+void obtain_write_lock(struct bucket *bucket, int mp_flag) {
   struct bucket *first, *second, *swap;
 
   if (mp_flag & DHIST_SINGLE_THREADED)
     return;
 
   if (bucket->above == NULL) {
-    lock_boundary(bucket, mp_flag, line);
+    lock_boundary(bucket, mp_flag);
     return;
   }
 
   first = bucket;
   second = bucket->above;
   while (1) {
-    lock_boundary(first, mp_flag, line);
-    if (trylock_boundary_succeeded(second, mp_flag, line)) {
+    lock_boundary(first, mp_flag);
+    if (trylock_boundary_succeeded(second, mp_flag)) {
       return;
     }
-    unlock_boundary(first, mp_flag, line);
+    unlock_boundary(first, mp_flag);
     swap = first;
     first = second;
     second = swap;
   }
 }
 
-void release_write_lock(struct bucket *bucket, int mp_flag, int line) {
+void release_write_lock(struct bucket *bucket, int mp_flag) {
   if (mp_flag & DHIST_SINGLE_THREADED)
     return;
-  unlock_boundary(bucket, mp_flag, line);
+  unlock_boundary(bucket, mp_flag);
   if (bucket->above)
-    unlock_boundary(bucket->above, mp_flag, line);
+    unlock_boundary(bucket->above, mp_flag);
 }
 
 void _print_tree(struct bucket *bucket, int depth) {
@@ -1114,7 +1068,7 @@ void print_tree(struct bucket *bucket) {
 }
 
 void assert_consistent(struct decaying_histogram *histogram) {
-  int num_buckets_seen = 0;
+  uint32_t num_buckets_seen = 0;
   double upper_bound, lower_bound;
   struct bucket *cursor = histogram->root;
   while (cursor->children[0])

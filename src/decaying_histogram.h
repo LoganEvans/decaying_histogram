@@ -37,21 +37,8 @@ extern "C" {
 #include <stdbool.h>
 #include <pthread.h>
 
-// Debugging
-#include <sys/syscall.h>
-#include <string.h>
-#include <unistd.h>
-
 #define DHIST_SINGLE_THREADED (1 << 0)
 #define DHIST_MULTI_THREADED  (1 << 1)
-
-#define LOCK_LOG_LEN 10
-
-struct lock_log {
-  uint64_t tid;
-  int line;
-  const char *event;
-};
 
 struct bucket {
   // The values for count, mu, update_generation and the below and above
@@ -75,8 +62,6 @@ struct bucket {
   // then for the first thread to attempt to update the bucket.
   bool is_enabled;
   bool lock_held;
-
-  struct lock_log lock_log[LOCK_LOG_LEN];
 };
 
 struct decaying_histogram {
