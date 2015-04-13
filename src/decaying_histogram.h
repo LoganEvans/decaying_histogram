@@ -37,8 +37,8 @@ extern "C" {
 #include <stdbool.h>
 #include <pthread.h>
 
-#define DHIST_SINGLE_THREADED (1 << 0)
-#define DHIST_MULTI_THREADED  (1 << 1)
+extern const int DHIST_SINGLE_THREADED;
+extern const int DHIST_MULTI_THREADED;
 
 struct bucket {
   // The values for count, mu, update_generation and the below and above
@@ -76,8 +76,8 @@ struct decaying_histogram {
   uint32_t num_buckets;
   uint32_t max_num_buckets;
   double *pow_table;
-  pthread_mutex_t tree_mtx;
-  pthread_mutex_t generation_mtx;
+  pthread_mutex_t *tree_mtx;
+  pthread_mutex_t *generation_mtx;
 };
 
 #define ABS_DIFF(x, y) (((x) - (y)) > 0 ? (x) - (y) : (y) - (x))

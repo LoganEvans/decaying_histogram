@@ -78,6 +78,9 @@ static void _split_bucket(
 static void _delete_bucket(
     struct decaying_histogram *histogram, struct bucket *bucket, int mp_flag);
 
+const int DHIST_SINGLE_THREADED = (1 << 0);
+const int DHIST_MULTI_THREADED = (1 << 1);
+
 
 struct bucket * init_bucket(
     struct decaying_histogram *histogram, int mp_flag) {
@@ -132,7 +135,6 @@ bool trylock_boundary_succeeded(struct bucket *bucket, int mp_flag) {
 }
 
 void unlock_boundary(struct bucket *bucket, int mp_flag) {
-  //printf("unlock_boundary\n");
   if (mp_flag & DHIST_MULTI_THREADED) {
     bucket->lock_held = false;
     pthread_mutex_unlock(bucket->boundary_mtx);
@@ -144,11 +146,11 @@ static uint64_t get_generation(
   uint64_t generation;
 
   if (mp_flag & DHIST_MULTI_THREADED) {
-    pthread_mutex_lock(&histogram->generation_mtx);
+    pthread_mutex_lock(histogram->generation_mtx);
     if (increment)
       ++histogram->generation;
     generation = histogram->generation;
-    pthread_mutex_unlock(&histogram->generation_mtx);
+    pthread_mutex_unlock(histogram->generation_mtx);
   } else {
     if (increment)
       ++histogram->generation;
@@ -365,19 +367,25 @@ void init_decaying_histogram(
   for (idx = 0; idx < histogram->max_num_buckets; idx++)
     histogram->pow_table[idx] = ipow(1.0 - alpha, idx);
 
-  pthread_mutex_init(&histogram->tree_mtx, NULL);
-  pthread_mutex_init(&histogram->generation_mtx, NULL);
+  histogram->tree_mtx = (pthread_mutex_t *)malloc(sizeof(pthread_mutex_t));
+  pthread_mutex_init(histogram->tree_mtx, NULL);
+
+  histogram->generation_mtx =
+      (pthread_mutex_t *)malloc(sizeof(pthread_mutex_t));
+  pthread_mutex_init(histogram->generation_mtx, NULL);
 
   return;
+}
+
+void clean_decaying_histogram(struct decaying_histogram *histogram) {
+  free(histogram->pow_table);
+  free(histogram->tree_mtx);
+  free(histogram->generation_mtx);
 }
 
 double total_count(struct decaying_histogram *histogram, uint64_t generation) {
   return (1 - get_decay(histogram, generation)) /
          histogram->alpha;
-}
-
-void clean_decaying_histogram(struct decaying_histogram *histogram) {
-  free(histogram->pow_table);
 }
 
 struct bucket * find_bucket(
@@ -495,7 +503,7 @@ void print_histogram(
   struct bucket *bucket;
 
   if (mp_flag & DHIST_MULTI_THREADED)
-    pthread_mutex_lock(&histogram->tree_mtx);
+    pthread_mutex_lock(histogram->tree_mtx);
 
   weights = (double *)malloc(sizeof(double) * histogram->max_num_buckets);
   boundaries = (double *)malloc(
@@ -522,7 +530,7 @@ void print_histogram(
   num_buckets = idx;
 
   if (mp_flag & DHIST_MULTI_THREADED)
-    pthread_mutex_unlock(&histogram->tree_mtx);
+    pthread_mutex_unlock(histogram->tree_mtx);
 
   printf("{");
   if (title)
@@ -778,7 +786,7 @@ void fix_balance(
 void split_bucket(
     struct decaying_histogram *histogram, struct bucket *bucket, int mp_flag) {
   if (mp_flag & DHIST_MULTI_THREADED)
-    pthread_mutex_lock(&histogram->tree_mtx);
+    pthread_mutex_lock(histogram->tree_mtx);
 
   assert_consistent(histogram);
   if (bucket->is_enabled)
@@ -786,7 +794,7 @@ void split_bucket(
   assert_consistent(histogram);
 
   if (mp_flag & DHIST_MULTI_THREADED)
-    pthread_mutex_unlock(&histogram->tree_mtx);
+    pthread_mutex_unlock(histogram->tree_mtx);
 }
 
 void _split_bucket(
@@ -864,13 +872,13 @@ void _split_bucket(
 void delete_bucket(
     struct decaying_histogram *histogram, struct bucket *bucket, int mp_flag) {
   if (mp_flag & DHIST_MULTI_THREADED)
-    pthread_mutex_lock(&histogram->tree_mtx);
+    pthread_mutex_lock(histogram->tree_mtx);
 
   if (bucket->is_enabled)
     _delete_bucket(histogram, bucket, mp_flag);
 
   if (mp_flag & DHIST_MULTI_THREADED)
-    pthread_mutex_unlock(&histogram->tree_mtx);
+    pthread_mutex_unlock(histogram->tree_mtx);
 }
 
 void _delete_bucket(

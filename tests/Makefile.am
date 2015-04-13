@@ -6,8 +6,8 @@ AM_LDFLAGS = $(GTEST_LDFLAGS) $(GTEST_LIBS) \
 
 # TESTS -- Programs run automatically by "make check"
 # check_PROGRAMS -- Programs built by "make check" but not necessarily run
-TESTS = 
-check_PROGRAMS = 
+TESTS =
+check_PROGRAMS =
 
 TESTS += decaying_histogram_test
 check_PROGRAMS += decaying_histogram_test
