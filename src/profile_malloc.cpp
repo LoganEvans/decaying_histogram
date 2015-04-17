@@ -113,6 +113,7 @@ int main() {
   struct thread_func_args args;
   struct timespec tim, tim2;
   char title[1000];
+  char *histogram_json;
   tim.tv_sec = 0;
   tim.tv_nsec = 1000000000 / FRAMES_PER_SECOND;
 
@@ -134,8 +135,11 @@ int main() {
 
     while (rdtsc() < args.end_timestamp) {
       nanosleep(&tim , &tim2);
-      print_histogram(g_histogram, true, title, "log_2(insertion time)",
+      histogram_json = get_new_histogram_json(
+          g_histogram, true, "Test", "log_2(insertion time)",
           DHIST_MULTI_THREADED);
+      puts(histogram_json);
+      free(histogram_json);
       fflush(stdout);
     }
 

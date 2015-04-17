@@ -78,6 +78,9 @@ static void _split_bucket(
     struct decaying_histogram *histogram, struct bucket *bucket, int mp_flag);
 static void _delete_bucket(
     struct decaying_histogram *histogram, struct bucket *bucket, int mp_flag);
+static int snprint_histogram(
+    char *s_buffer, int n, const char *title, const char *xlabel,
+    uint64_t generation, double *boundaries, double *weights, int num_buckets);
 
 const int DHIST_SINGLE_THREADED = (1 << 0);
 const int DHIST_MULTI_THREADED = (1 << 1);
@@ -379,6 +382,7 @@ void init_decaying_histogram(
 }
 
 void clean_decaying_histogram(struct decaying_histogram *histogram) {
+  // XXX free the buckets.
   free(histogram->pow_table);
   free(histogram->tree_mtx);
   free(histogram->generation_mtx);
@@ -493,14 +497,50 @@ void dh_insert(
   }
 }
 
+// Call this with n == 0 to get a count of how many characters (not including
+// the \0) needed to print the histogram. Call again with an allocated buffer
+// to construct the string.
+int snprint_histogram(
+    char *s_buffer, int n, const char *title, const char *xlabel,
+    uint64_t generation, double *boundaries, double *weights,
+    int num_buckets) {
+  int num_chars = 0, idx;
+
+  num_chars += snprintf(s_buffer + num_chars, n, "{");
+  if (title) {
+    num_chars +=
+        snprintf(s_buffer + num_chars, n, "\"title\": \"%s\", ", title);
+  }
+  if (xlabel) {
+    num_chars +=
+        snprintf(s_buffer + num_chars, n, "\"xlabel\": \"%s\", ", xlabel);
+  }
+
+  num_chars +=
+      snprintf(s_buffer + num_chars, n, "\"generation\": %lu, ", generation);
+
+  num_chars += snprintf(s_buffer + num_chars, n, "\"weights\": [");
+  for (idx = 0; idx < num_buckets - 1; idx++)
+    num_chars += snprintf(s_buffer + num_chars, n, "%lf, ", weights[idx]);
+  num_chars += snprintf(s_buffer + num_chars, n, "%lf], ", weights[idx]);
+
+  num_chars += snprintf(s_buffer + num_chars, n, "\"boundaries\": [");
+  for (idx = 0; idx < num_buckets; idx++)
+    num_chars += snprintf(s_buffer + num_chars, n, "%lf, ", boundaries[idx]);
+  num_chars += snprintf(s_buffer + num_chars, n, "%lf]}", boundaries[idx]);
+
+  return num_chars;
+}
+
 // XXX Implement estimate_ok
-void print_histogram(
+char * get_new_histogram_json(
     struct decaying_histogram *histogram, bool estimate_ok,
     const char *title, const char *xlabel, int mp_flag) {
-  int idx, num_buckets;  // Use signed int to avoid (0 - 1) issues.
+  int idx, num_buckets, num_chars;
   uint64_t generation;
   double *boundaries, *weights;
   struct bucket *bucket;
+  char *buffer;
 
   if (mp_flag & DHIST_MULTI_THREADED)
     pthread_mutex_lock(histogram->tree_mtx);
@@ -533,28 +573,17 @@ void print_histogram(
   if (mp_flag & DHIST_MULTI_THREADED)
     pthread_mutex_unlock(histogram->tree_mtx);
 
-  printf("{");
-  if (title)
-    printf("\"title\": \"%s\", ", title);
-  if (xlabel)
-    printf("\"xlabel\": \"%s\", ", xlabel);
-
-  printf("\"generation\": %lu, ", generation);
-
-  printf("\"weights\": [");
-  for (idx = 0; idx < num_buckets - 1; idx++) {
-    printf("%lf, ", weights[idx]);
-  }
-  printf("%lf], ", weights[idx]);
-
-  printf("\"boundaries\": [");
-  for (idx = 0; idx < num_buckets; idx++) {
-    printf("%lf, ", boundaries[idx]);
-  }
-  printf("%lf]}\n", boundaries[idx]);
+  num_chars = snprint_histogram(
+      NULL, 0, title, xlabel, generation, boundaries, weights, num_buckets);
+  buffer = (char *)malloc(sizeof(char) * (num_chars + 1));
+  snprint_histogram(
+      buffer, num_chars + 1, title, xlabel, generation, boundaries, weights,
+      num_buckets);
 
   free(weights);
   free(boundaries);
+
+  return buffer;
 }
 
 double Jaccard_distance(

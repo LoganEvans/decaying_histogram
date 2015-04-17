@@ -109,9 +109,9 @@ double Jaccard_distance(
     struct decaying_histogram *hist0, struct decaying_histogram *hist1);
 double Kolomogorov_Smirnov_statistic(
     struct decaying_histogram *hist0, struct decaying_histogram *hist1);
-void print_histogram(
+char * get_new_histogram_json(
     struct decaying_histogram *histogram, bool estimate_ok,
-    const char *title, const char *xaxis, int mp_flag);
+    const char *title, const char *xlabel, int mp_flag);
 
 int assert_invariant(struct bucket *root);
 int count_nodes(struct bucket *root);

@@ -32,17 +32,17 @@
 #include "decaying_histogram.h"
 #include <random>
 
-#define NUM_BUCKETS 200
-#define NUM_THREADS 4
+#define NUM_BUCKETS 50
+#define NUM_THREADS 1
 #define ALPHA 0.000001
 
 // 2.397 * 1024 * 1024 * 1024 is roughly the number of cycles in a second.
-#define CYCLES ((uint64_t)(60 * 2.397 * 1024 * 1024 * 1024))
+#define CYCLES ((uint64_t)(1 * 2.397 * 1024 * 1024 * 1024))
 #define DHIST_MP_FLAG \
     (NUM_THREADS > 1 ? DHIST_MULTI_THREADED : DHIST_SINGLE_THREADED)
 #define FRAMES_PER_SECOND 5
 
-#define ANIMATE 1
+#define ANIMATE 0
 #define NORMAL_DISTRIBUTION 1
 
 static struct decaying_histogram *g_histogram;
@@ -92,6 +92,8 @@ int main() {
   pthread_t threads[NUM_THREADS];
   struct thread_func_args args;
   struct timespec tim, tim2;
+  char *histogram_json;
+
   tim.tv_sec = 0;
   tim.tv_nsec = 1000000000 / FRAMES_PER_SECOND;
 
@@ -107,8 +109,10 @@ int main() {
 #if ANIMATE
   while (1) {
     nanosleep(&tim , &tim2);
-    print_histogram(g_histogram, true, "Test", "log_2(insertion time)",
-        DHIST_MP_FLAG);
+    histogram_json = get_new_histogram_json(
+        g_histogram, true, "Test", "log_2(insertion time)", DHIST_MP_FLAG);
+    puts(histogram_json);
+    free(histogram_json);
     fflush(stdout);
   }
 #endif
@@ -116,8 +120,10 @@ int main() {
   for (int i = 0; i < NUM_THREADS; i++)
     pthread_join(threads[i], NULL);
 
-  print_histogram(
+  histogram_json = get_new_histogram_json(
       g_histogram, true, "Test", "log_2(insertion time)", DHIST_MP_FLAG);
+  puts(histogram_json);
+  free(histogram_json);
   //clean_decaying_histogram(g_histogram);
   //delete g_histogram;
 
