@@ -32,19 +32,25 @@
 #include "decaying_histogram.h"
 #include <random>
 
-#define NUM_BUCKETS 50
-#define NUM_THREADS 2
+#define NUM_BUCKETS 200
+#define NUM_THREADS 4
 #define ALPHA 0.000001
 
 // 2.397 * 1024 * 1024 * 1024 is roughly the number of cycles in a second.
-#define CYCLES ((uint64_t)(1 * 2.397 * 1024 * 1024 * 1024))
+#define CYCLES ((uint64_t)(60 * 2.397 * 1024 * 1024 * 1024))
 #define DHIST_MP_FLAG \
     (NUM_THREADS > 1 ? DHIST_MULTI_THREADED : DHIST_SINGLE_THREADED)
 #define FRAMES_PER_SECOND 5
 
-#define ANIMATE 0
+#define ANIMATE 1
+#define NORMAL_DISTRIBUTION 1
 
 static struct decaying_histogram *g_histogram;
+
+#if NORMAL_DISTRIBUTION
+std::default_random_engine g_generator;
+std::normal_distribution<double> g_distribution(0.0, 1.0);
+#endif
 
 static uint64_t rdtsc() {
   uint32_t hi, lo;
@@ -69,8 +75,13 @@ thread_func(void *args) {
   while (last_timestamp < stop_timestamp) {
 #endif
     this_timestamp = rdtsc();
+#if NORMAL_DISTRIBUTION
+    dh_insert(
+        g_histogram, g_distribution(g_generator), DHIST_MP_FLAG);
+#else
     dh_insert(
         g_histogram, log2(this_timestamp - last_timestamp), DHIST_MP_FLAG);
+#endif
     last_timestamp = this_timestamp;
   }
 

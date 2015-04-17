@@ -80,8 +80,6 @@ struct decaying_histogram {
   pthread_mutex_t *generation_mtx;
 };
 
-#define ABS_DIFF(x, y) (((x) - (y)) > 0 ? (x) - (y) : (y) - (x))
-
 struct bucket * init_bucket(struct decaying_histogram *histogram, int mp_flag);
 void init_decaying_histogram(
     struct decaying_histogram *histogram, int target_buckets,

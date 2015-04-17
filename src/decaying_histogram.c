@@ -64,6 +64,7 @@ static struct bucket * rotate_double(
     struct decaying_histogram *histogram, struct bucket *root, int dir);
 static int compute_balance(struct bucket *bucket);
 static void _print_tree(struct bucket *bucket, int depth);
+static int count_buckets_in_tree(struct bucket *root);
 static void assert_consistent(struct decaying_histogram *histogram);
 static bool is_target_boundary(struct bucket *bucket, double observation);
 static void obtain_write_lock(struct bucket *bucket, int mp_flag);
@@ -445,8 +446,7 @@ void dh_insert(
     // we'll drop our lock and try again.
 
     if (!bucket->below) {
-      boundary = observation;
-    } else if (!bucket->above) {
+      // Always insert the observaiton into this bucket.
       boundary = observation;
     } else {
       boundary = compute_bound(histogram, bucket->below, bucket);
@@ -497,7 +497,7 @@ void dh_insert(
 void print_histogram(
     struct decaying_histogram *histogram, bool estimate_ok,
     const char *title, const char *xlabel, int mp_flag) {
-  uint32_t idx, num_buckets;
+  int idx, num_buckets;  // Use signed int to avoid (0 - 1) issues.
   uint64_t generation;
   double *boundaries, *weights;
   struct bucket *bucket;
@@ -521,13 +521,14 @@ void print_histogram(
     weights[idx] = weight(
         histogram, bucket, generation,
         &boundaries[idx], &boundaries[idx + 1]);
+
     unlock_boundary(bucket, mp_flag);
     if (bucket->above == NULL)
       break;
     bucket = bucket->above;
     idx++;
   }
-  num_buckets = idx;
+  num_buckets = idx + 1;
 
   if (mp_flag & DHIST_MULTI_THREADED)
     pthread_mutex_unlock(histogram->tree_mtx);
@@ -788,10 +789,8 @@ void split_bucket(
   if (mp_flag & DHIST_MULTI_THREADED)
     pthread_mutex_lock(histogram->tree_mtx);
 
-  assert_consistent(histogram);
   if (bucket->is_enabled)
     _split_bucket(histogram, bucket, mp_flag);
-  assert_consistent(histogram);
 
   if (mp_flag & DHIST_MULTI_THREADED)
     pthread_mutex_unlock(histogram->tree_mtx);
@@ -851,6 +850,12 @@ void _split_bucket(
     median = lower_bound + diameter / 2.0;
     new_bucket->mu = median - diameter / 6.0;
     bucket->mu = median + diameter / 6.0;
+    //printf("??? lower_bound: %lf, upper_bound: %lf, "
+    //       "diameter: %lf, median: %lf, new_bucket->mu: %lf, "
+    //       "bucket->mu: %lf\n",
+    //       lower_bound, upper_bound,
+    //       diameter, median, new_bucket->mu,
+    //       bucket->mu);
   }
   release_write_lock(bucket, mp_flag);
 
@@ -1075,10 +1080,20 @@ void print_tree(struct bucket *bucket) {
   printf("\n");
 }
 
+int count_buckets_in_tree(struct bucket *root) {
+  if (root) {
+    return 1 +
+        count_buckets_in_tree(root->children[0]) +
+        count_buckets_in_tree(root->children[1]);
+  } else {
+    return 0;
+  }
+}
+
 void assert_consistent(struct decaying_histogram *histogram) {
   uint32_t num_buckets_seen = 0;
   double upper_bound, lower_bound;
-  struct bucket *cursor = histogram->root;
+  struct bucket *cursor = histogram->root, *cursor_two;
   while (cursor->children[0])
     cursor = cursor->children[0];
 
@@ -1119,10 +1134,26 @@ void assert_consistent(struct decaying_histogram *histogram) {
       assert(cursor->mu <= cursor->above->mu);
     }
 
+    // Make sure we can find this bucket in the tree.
+    cursor_two = histogram->root;
+    while (true) {
+      if (cursor_two == NULL) {
+        printf("Could not find bucket with mu %lf in the tree.\n", cursor->mu);
+        assert(false);
+      } else if (cursor_two->mu == cursor->mu) {
+        break;
+      } else if (cursor->mu < cursor_two->mu) {
+        cursor_two = cursor_two->children[0];
+      } else {
+        cursor_two = cursor_two->children[1];
+      }
+    }
+
     cursor = cursor->above;
   }
 
   assert(num_buckets_seen == histogram->num_buckets);
+  assert(count_buckets_in_tree(histogram->root) == histogram->num_buckets);
   assert_invariant(histogram->root);
 }
 
