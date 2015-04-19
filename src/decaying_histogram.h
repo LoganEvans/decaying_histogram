@@ -106,11 +106,14 @@ void decay(
     struct decaying_histogram *histogram, struct bucket *bucket,
     uint64_t generation);
 double Jaccard_distance(
-    struct decaying_histogram *hist0, struct decaying_histogram *hist1);
+    struct decaying_histogram *hist1, struct decaying_histogram *hist2,
+    bool estimate_ok, int mp_flag);
 double Kolomogorov_Smirnov_statistic(
-    struct decaying_histogram *hist0, struct decaying_histogram *hist1);
+    struct decaying_histogram *hist1, struct decaying_histogram *hist2,
+    bool estimate_ok, int mp_flag);
 double Wasserstein_distance(
-    struct decaying_histogram *hist0, struct decaying_histogram *hist1);
+    struct decaying_histogram *hist1, struct decaying_histogram *hist2,
+    bool estimate_ok, int mp_flag);
 char * get_new_histogram_json(
     struct decaying_histogram *histogram, bool estimate_ok,
     const char *title, const char *xlabel, int mp_flag);
