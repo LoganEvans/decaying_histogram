@@ -78,8 +78,19 @@ static void _split_bucket(
     struct decaying_histogram *histogram, struct bucket *bucket, int mp_flag);
 static void _delete_bucket(
     struct decaying_histogram *histogram, struct bucket *bucket, int mp_flag);
+
+static void extract_info(
+    struct decaying_histogram *histogram, bool estimate_ok, int mp_flag,
+    int *num_buckets, uint64_t *generation,
+    double **weights, double **boundaries);
+
+static void union_of_boundaries(
+    int num_boundaries1, double *boundaries1,
+    int num_boundaries2, double *boundaries2,
+    int *union_num_boundaries, double **union_boundaries);
+
 static int snprint_histogram(
-    char *s_buffer, int n, const char *title, const char *xlabel,
+    char *s_buffer, uint64_t n, const char *title, const char *xlabel,
     uint64_t generation, double *boundaries, double *weights, int num_buckets);
 
 const int DHIST_SINGLE_THREADED = (1 << 0);
@@ -501,7 +512,7 @@ void dh_insert(
 // the \0) needed to print the histogram. Call again with an allocated buffer
 // to construct the string.
 int snprint_histogram(
-    char *s_buffer, int n, const char *title, const char *xlabel,
+    char *s_buffer, uint64_t n, const char *title, const char *xlabel,
     uint64_t generation, double *boundaries, double *weights,
     int num_buckets) {
   int num_chars = 0, idx;
@@ -532,46 +543,18 @@ int snprint_histogram(
   return num_chars;
 }
 
-// XXX Implement estimate_ok
 char * get_new_histogram_json(
     struct decaying_histogram *histogram, bool estimate_ok,
     const char *title, const char *xlabel, int mp_flag) {
-  int idx, num_buckets, num_chars;
+  int num_buckets;
+  uint64_t num_chars;
   uint64_t generation;
   double *boundaries, *weights;
-  struct bucket *bucket;
   char *buffer;
 
-  if (mp_flag & DHIST_MULTI_THREADED)
-    pthread_mutex_lock(histogram->tree_mtx);
-
-  weights = (double *)malloc(sizeof(double) * histogram->max_num_buckets);
-  boundaries = (double *)malloc(
-      sizeof(double) * (histogram->max_num_buckets + 1));
-
-  generation = get_generation(histogram, false, mp_flag);
-
-  bucket = histogram->root;
-  while (bucket->below)
-    bucket = bucket->below;
-
-  idx = 0;
-  while (1) {
-    lock_boundary(bucket, mp_flag);
-    weights[idx] = weight(
-        histogram, bucket, generation,
-        &boundaries[idx], &boundaries[idx + 1]);
-
-    unlock_boundary(bucket, mp_flag);
-    if (bucket->above == NULL)
-      break;
-    bucket = bucket->above;
-    idx++;
-  }
-  num_buckets = idx + 1;
-
-  if (mp_flag & DHIST_MULTI_THREADED)
-    pthread_mutex_unlock(histogram->tree_mtx);
+  extract_info(
+      histogram, estimate_ok, mp_flag, &num_buckets, &generation,
+      &weights, &boundaries);
 
   num_chars = snprint_histogram(
       NULL, 0, title, xlabel, generation, boundaries, weights, num_buckets);
@@ -588,6 +571,12 @@ char * get_new_histogram_json(
 
 double Jaccard_distance(
     struct decaying_histogram *hist0, struct decaying_histogram *hist1) {
+
+  // Compute union of bucket boundaries.
+  // Redistribute hist1 to those boundares.
+  // Redistribute hist2 to those boundaries.
+  // Do stuff...
+
   assert(hist0 && hist1);
   assert(false);
   return 0.0;
@@ -598,6 +587,90 @@ double Kolomogorov_Smirnov_statistic(
   assert(hist0 && hist1);
   assert(false);
   return 0.0;
+}
+
+// AKA the earth mover's distance.
+double Wasserstein_distance(
+    struct decaying_histogram *hist0, struct decaying_histogram *hist1) {
+  assert(hist0 && hist1);
+  assert(false);
+  return 0.0;
+}
+
+// XXX Implement estimate_ok
+void extract_info(
+    struct decaying_histogram *histogram, bool estimate_ok, int mp_flag,
+    int *num_buckets, uint64_t *generation,
+    double **weights, double **boundaries) {
+  int idx;
+  struct bucket *bucket;
+
+  if (mp_flag & DHIST_MULTI_THREADED)
+    pthread_mutex_lock(histogram->tree_mtx);
+
+  *weights = (double *)malloc(sizeof(double) * histogram->max_num_buckets);
+  *boundaries = (double *)malloc(
+      sizeof(double) * (histogram->max_num_buckets + 1));
+
+  *generation = get_generation(histogram, false, mp_flag);
+
+  bucket = histogram->root;
+  while (bucket->below)
+    bucket = bucket->below;
+
+  idx = 0;
+  while (1) {
+    lock_boundary(bucket, mp_flag);
+    (*weights)[idx] = weight(
+        histogram, bucket, *generation,
+        &(*boundaries)[idx], &(*boundaries)[idx + 1]);
+
+    unlock_boundary(bucket, mp_flag);
+    if (bucket->above == NULL)
+      break;
+    bucket = bucket->above;
+    idx++;
+  }
+  *num_buckets = idx + 1;
+
+  if (mp_flag & DHIST_MULTI_THREADED)
+    pthread_mutex_unlock(histogram->tree_mtx);
+}
+
+void union_of_boundaries(
+    int num_boundaries1, double *boundaries1,
+    int num_boundaries2, double *boundaries2,
+    int *union_num_boundaries, double **union_boundaries) {
+  int idx1, idx2, union_idx;
+  double memo;
+
+  *union_boundaries = (double *)malloc(
+      (num_boundaries1 + num_boundaries2) * sizeof(double));
+
+  idx1 = idx2 = union_idx = 0;
+  while (idx1 < num_boundaries1 || idx2 < num_boundaries2) {
+    if (idx1 < num_boundaries && idx2 < num_boundaries2 &&
+        boundaries1[idx1] == boundaries2[idx2]) {
+      (*union_boundaries)[union_idx] = boundaries1[idx1];
+      idx1++;
+      idx2++;
+    } else if (idx2 == num_boundaries2 ||
+               boundaries1[idx1] < boundaries2[idx2]) {
+      (*union_boundaries)[union_idx] = boundaries1[idx1];
+      idx1++;
+    } else {
+      (*union_boundaries)[union_idx] = boundaries2[idx2];
+      idx2++;
+    }
+    union_idx++;
+  }
+  *union_num_boundaries = union_idx;
+}
+
+void redistribute(
+    int orig_num_buckets, double *orig_weights, double *orig_boundaries,
+    int final_num_buckets, double *final_weights, double *final_boundaries) {
+  // XXX
 }
 
 int count_nodes(struct bucket *root) {

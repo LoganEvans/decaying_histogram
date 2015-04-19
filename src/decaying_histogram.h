@@ -109,6 +109,8 @@ double Jaccard_distance(
     struct decaying_histogram *hist0, struct decaying_histogram *hist1);
 double Kolomogorov_Smirnov_statistic(
     struct decaying_histogram *hist0, struct decaying_histogram *hist1);
+double Wasserstein_distance(
+    struct decaying_histogram *hist0, struct decaying_histogram *hist1);
 char * get_new_histogram_json(
     struct decaying_histogram *histogram, bool estimate_ok,
     const char *title, const char *xlabel, int mp_flag);
