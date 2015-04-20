@@ -20,13 +20,15 @@ class _DecayingHistogram(ctypes.Structure):
 class DecayingHistogram(object):
     lib_dir = os.path.dirname(os.path.abspath(__file__))
     _libdhist = ctypes.CDLL(os.path.join(lib_dir, "libdhistlib.so"))
-    _libdhist.get_new_histogram_json.argtypes = (
-            ctypes.POINTER(_DecayingHistogram),
-            ctypes.c_bool,
-            ctypes.c_char_p,
-            ctypes.c_char_p)
     # Not setting this to c_char_p because we have to free it.
     _libdhist.get_new_histogram_json.restype = ctypes.c_void_p
+
+    _libdhist.Jaccard_distance.argtypes = (
+            ctypes.POINTER(_DecayingHistogram),
+            ctypes.POINTER(_DecayingHistogram),
+            ctypes.c_bool,
+            ctypes.c_int)
+    _libdhist.Jaccard_distance.restype = ctypes.c_double
 
     _libc = ctypes.CDLL(ctypes.util.find_library('c'))
     _libc.free.argtypes = (ctypes.c_void_p,)
@@ -34,12 +36,12 @@ class DecayingHistogram(object):
     def __init__(self, target_buckets, alpha):
         self._dhist = _DecayingHistogram()
         self._dhist_ptr = ctypes.pointer(self._dhist)
-        self.DHIST_SINGLE_THREADED = ctypes.cast(
+        self.DHIST_SINGLE_THREADED = ctypes.c_int(ctypes.cast(
                 self._libdhist.DHIST_SINGLE_THREADED,
-                ctypes.POINTER(ctypes.c_int)).contents.value
-        self.DHIST_MULTI_THREADED = ctypes.cast(
+                ctypes.POINTER(ctypes.c_int)).contents.value)
+        self.DHIST_MULTI_THREADED = ctypes.c_int(ctypes.cast(
                 self._libdhist.DHIST_MULTI_THREADED,
-                ctypes.POINTER(ctypes.c_int)).contents.value
+                ctypes.POINTER(ctypes.c_int)).contents.value)
         self._libdhist.init_decaying_histogram(
                 self._dhist_ptr, ctypes.c_uint(target_buckets),
                 ctypes.c_double(alpha))
@@ -54,18 +56,26 @@ class DecayingHistogram(object):
 
     def __str__(self):
         result = self._libdhist.get_new_histogram_json(
-                self._dhist, True, "foobar", "xaxix", "yaxis")
+                self._dhist_ptr, ctypes.c_bool(True),
+                ctypes.c_char_p("foobar"), ctypes.c_char_p("xaxix"),
+                ctypes.c_char_p("yaxis"), self.DHIST_MULTI_THREADED)
         histogram_json = ctypes.cast(result, ctypes.c_char_p).value
         self._libc.free(result)
         return histogram_json
 
+    def Jaccard_distance(self, other):
+        return self._libdhist.Jaccard_distance(
+                self._dhist_ptr, other._dhist_ptr,
+                True, self.DHIST_MULTI_THREADED)
 
-foo = DecayingHistogram(10, 0.0001)
-import random
-while True:
-    for idx in range(10000):
-        foo.insert(random.normalvariate(0, 1))
-    x = foo.get_json()
-    x["title"] = str(x["generation"])
-    print json.dumps(x)
+
+if __name__ == '__main__':
+    foo = DecayingHistogram(10, 0.0001)
+    import random
+    while True:
+        for idx in range(10000):
+            foo.insert(random.normalvariate(0, 1))
+        x = foo.get_json()
+        x["title"] = str(x["generation"])
+        print json.dumps(x)
 

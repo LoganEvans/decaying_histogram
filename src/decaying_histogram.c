@@ -95,7 +95,7 @@ static void extract_info(
 static void union_of_boundaries(
     int num_boundaries1, double *boundaries1,
     int num_boundaries2, double *boundaries2,
-    int *union_num_boundaries, double **union_boundaries);
+    int *num_boundaries_union, double **union_boundaries);
 
 static void redistribute(
     int orig_num_buckets, double *orig_weights, double *orig_boundaries,
@@ -104,6 +104,17 @@ static void redistribute(
 static int snprint_histogram(
     char *s_buffer, uint64_t n, const char *title, const char *xlabel,
     uint64_t generation, double *boundaries, double *weights, int num_buckets);
+
+static double integral(int num_buckets, double *weights, double *boundaries) {
+  int idx;
+  double res = 0.0;
+
+  for (idx = 0; idx < num_buckets; idx++) {
+    res += weights[idx] * (boundaries[idx + 1] - boundaries[idx]);
+  }
+
+  return res;
+}
 
 const int DHIST_SINGLE_THREADED = (1 << 0);
 const int DHIST_MULTI_THREADED = (1 << 1);
@@ -584,7 +595,8 @@ char * get_new_histogram_json(
 double Jaccard_distance(
     struct decaying_histogram *hist1, struct decaying_histogram *hist2,
     bool estimate_ok, int mp_flag) {
-  int generation, num_buckets1, num_buckets2, num_buckets_redist, idx;
+  int generation, num_buckets1, num_buckets2;
+  int num_boundaries_union, num_buckets_redist, idx;
   double *weights1, *weights2;
   double *boundaries1, *boundaries2;
   double *union_boundaries;
@@ -600,10 +612,13 @@ double Jaccard_distance(
       &num_buckets2, &generation, &weights2, &boundaries2);
 
   union_of_boundaries(
-      num_buckets1, boundaries1,
-      num_buckets2, boundaries2,
-      &num_buckets_redist, &union_boundaries);
+      num_buckets1 + 1, boundaries1,
+      num_buckets2 + 1, boundaries2,
+      &num_boundaries_union, &union_boundaries);
+  num_buckets_redist = num_boundaries_union - 1;
 
+  redist_weights1 = (double *)malloc(num_buckets_redist * sizeof(double));
+  redist_weights2 = (double *)malloc(num_buckets_redist * sizeof(double));
   redistribute(
       num_buckets1, weights1, boundaries1,
       num_buckets_redist, redist_weights1, union_boundaries);
@@ -611,12 +626,31 @@ double Jaccard_distance(
       num_buckets2, weights2, boundaries2,
       num_buckets_redist, redist_weights2, union_boundaries);
 
+  int i;
+  printf("===========\n");
+  printf("orig1: [");
+  for (i = 0; i < num_buckets1; i++) {
+    printf("<%lf> %lf ", boundaries1[i], weights1[i]);
+  }
+  printf("<%lf>]\n", boundaries1[i]);
+  printf("??? %lf\n", integral(num_buckets1, weights1, boundaries1));
+
+  printf("redist1: [");
+  for (i = 0; i < num_buckets_redist; i++) {
+    printf("<%lf> %lf ", union_boundaries[i], redist_weights1[i]);
+  }
+  printf("<%lf>]\n", union_boundaries[i]);
+  printf("??? %lf\n", integral(num_buckets_redist, redist_weights1, union_boundaries));
+
   // Do actual work.
   union_area = intersection_area = 0.0;
+  float cdf = 0.0;
   for (idx = 0; idx < num_buckets_redist; idx++) {
     width = union_boundaries[idx + 1] - union_boundaries[idx];
-    union_area += width * MAX(weights1[idx], weights2[idx]);
-    intersection_area += width * MIN(weights1[idx], weights2[idx]);
+    cdf += width * redist_weights1[idx];
+    union_area += width * MAX(redist_weights1[idx], redist_weights2[idx]);
+    intersection_area +=
+        width * MIN(redist_weights1[idx], redist_weights2[idx]);
   }
   distance = 1.0 - intersection_area / union_area;
 
@@ -692,7 +726,7 @@ void extract_info(
 void union_of_boundaries(
     int num_boundaries1, double *boundaries1,
     int num_boundaries2, double *boundaries2,
-    int *union_num_boundaries, double **union_boundaries) {
+    int *num_boundaries_union, double **union_boundaries) {
   int idx1, idx2, union_idx;
   double memo;
 
@@ -707,7 +741,8 @@ void union_of_boundaries(
       idx1++;
       idx2++;
     } else if (idx2 == num_boundaries2 ||
-               boundaries1[idx1] < boundaries2[idx2]) {
+               ((idx1 < num_boundaries1) &&
+                (boundaries1[idx1] < boundaries2[idx2]))) {
       (*union_boundaries)[union_idx] = boundaries1[idx1];
       idx1++;
     } else {
@@ -716,21 +751,31 @@ void union_of_boundaries(
     }
     union_idx++;
   }
-  *union_num_boundaries = union_idx;
+  *num_boundaries_union = union_idx;
 }
 
 void redistribute(
     int orig_num_buckets, double *orig_weights, double *orig_boundaries,
     int final_num_buckets, double *final_weights, double *final_boundaries) {
-  int final_idx, orig_idx;
+  int final_idx, orig_idx, orig_num_boundaries;
 
+  orig_num_boundaries = orig_num_buckets + 1;
   orig_idx = 0;
   for (final_idx = 0; final_idx < final_num_buckets; final_idx++) {
-    if (final_boundaries[final_idx] < orig_boundaries[orig_idx]) {
+    if (orig_idx + 1 < orig_num_boundaries &&
+        orig_boundaries[orig_idx + 1] <= final_boundaries[final_idx]) {
       // Shift the orig cursor.
       orig_idx++;
     }
-    final_weights[final_idx] = orig_weights[orig_idx];
+
+    if (final_boundaries[final_idx] <= orig_boundaries[0]) {
+      final_weights[final_idx] = 0.0;
+    } else if (final_boundaries[final_idx] >
+               orig_boundaries[orig_num_buckets]) {
+      final_weights[final_idx] = 0.0;
+    } else {
+      final_weights[final_idx] = orig_weights[orig_idx];
+    }
   }
 }
 

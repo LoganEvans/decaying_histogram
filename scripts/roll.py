@@ -49,10 +49,8 @@ def create_bucket_class(alpha_mu=0.001, alpha_count=0.001):
                 self._min = observation
 
             self.decay()
+            self.mu = (self.mu * self.count + observation) / (1.0 + self.count)
             self.count += 1.0
-            self.mu = (
-                    Bucket.ALPHA_MU * observation +
-                    (1.0 - Bucket.ALPHA_MU) * self.mu)
 
             if self.bucket_below:
                 self.bucket_below.decay()
