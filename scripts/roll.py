@@ -321,9 +321,10 @@ def calc_jaccard_distance(cdf0, cdf1):
 
     intersection = 0.0
     union = 0.0
-    for i in range(len(new_cdf0)):
-        intersection += min(new_cdf0[i][1], new_cdf1[i][1])
-        union += max(new_cdf0[i][1], new_cdf1[i][1])
+    # XXX... Shouldn't this use the pdf?
+    for i in range(1, len(new_cdf0)):
+        intersection += min(new_cdf0[i][1] - new_cdf0[i - 1][1], new_cdf1[i][1] - new_cdf1[i - 1][1])
+        union += max(new_cdf0[i][1] - new_cdf0[i - 1][1], new_cdf1[i][1] - new_cdf1[i - 1][1])
     return 1.0 - intersection / union
 
 

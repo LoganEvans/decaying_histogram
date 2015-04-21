@@ -626,28 +626,30 @@ double Jaccard_distance(
       num_buckets2, weights2, boundaries2,
       num_buckets_redist, redist_weights2, union_boundaries);
 
-  int i;
-  printf("===========\n");
-  printf("orig1: [");
-  for (i = 0; i < num_buckets1; i++) {
-    printf("<%lf> %lf ", boundaries1[i], weights1[i]);
-  }
-  printf("<%lf>]\n", boundaries1[i]);
-  printf("??? %lf\n", integral(num_buckets1, weights1, boundaries1));
+  //if (num_buckets1 > 30 && num_buckets2 > 30) {
+  //  int i;
+  //  printf("===========\n");
+  //  printf("orig1: [");
+  //  for (i = 0; i < num_buckets1; i++) {
+  //    printf("<%lf> %lf ", boundaries1[i], weights1[i]);
+  //  }
+  //  printf("<%lf>]\n", boundaries1[i]);
+  //  printf("??? %lf\n", integral(num_buckets1, weights1, boundaries1));
+  //  printf("??? %lf\n", integral(num_buckets2, weights2, boundaries2));
 
-  printf("redist1: [");
-  for (i = 0; i < num_buckets_redist; i++) {
-    printf("<%lf> %lf ", union_boundaries[i], redist_weights1[i]);
-  }
-  printf("<%lf>]\n", union_boundaries[i]);
-  printf("??? %lf\n", integral(num_buckets_redist, redist_weights1, union_boundaries));
+  //  printf("redist1: [");
+  //  for (i = 0; i < num_buckets_redist; i++) {
+  //    printf("<%lf> %lf ", union_boundaries[i], redist_weights1[i]);
+  //  }
+  //  printf("<%lf>]\n", union_boundaries[i]);
+  //  printf("??? %lf\n", integral(num_buckets_redist, redist_weights1, union_boundaries));
+  //  printf("??? %lf\n", integral(num_buckets_redist, redist_weights2, union_boundaries));
+  //}
 
   // Do actual work.
   union_area = intersection_area = 0.0;
-  float cdf = 0.0;
   for (idx = 0; idx < num_buckets_redist; idx++) {
     width = union_boundaries[idx + 1] - union_boundaries[idx];
-    cdf += width * redist_weights1[idx];
     union_area += width * MAX(redist_weights1[idx], redist_weights2[idx]);
     intersection_area +=
         width * MIN(redist_weights1[idx], redist_weights2[idx]);
@@ -768,7 +770,7 @@ void redistribute(
       orig_idx++;
     }
 
-    if (final_boundaries[final_idx] <= orig_boundaries[0]) {
+    if (final_boundaries[final_idx] < orig_boundaries[0]) {
       final_weights[final_idx] = 0.0;
     } else if (final_boundaries[final_idx] >
                orig_boundaries[orig_num_buckets]) {
