@@ -764,16 +764,20 @@ void redistribute(
   orig_num_boundaries = orig_num_buckets + 1;
   orig_idx = 0;
   for (final_idx = 0; final_idx < final_num_buckets; final_idx++) {
-    if (orig_idx + 1 < orig_num_boundaries &&
-        orig_boundaries[orig_idx + 1] <= final_boundaries[final_idx]) {
-      // Shift the orig cursor.
+    if (orig_boundaries[orig_idx] < final_boundaries[final_idx]) {
+      // Shift the orig boundary that we're considering.
       orig_idx++;
     }
 
+    if (orig_idx == orig_num_buckets) {
+      // We've exhausted the distribution. Fill in the rest and exit.
+      for (; final_idx < final_num_buckets; final_idx++) {
+        final_weights[final_idx] = 0.0;
+      }
+      return;
+    }
+
     if (final_boundaries[final_idx] < orig_boundaries[0]) {
-      final_weights[final_idx] = 0.0;
-    } else if (final_boundaries[final_idx] >
-               orig_boundaries[orig_num_buckets]) {
       final_weights[final_idx] = 0.0;
     } else {
       final_weights[final_idx] = orig_weights[orig_idx];

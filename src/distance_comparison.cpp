@@ -26,23 +26,25 @@
  */
 
 
+#include <assert.h>
 #include <math.h>
 #include <stdio.h>
 #include "decaying_histogram.h"
 #include <random>
 
-#define NUM_BUCKETS 50
+#define NUM_BUCKETS 200
 #define ALPHA_SLOW 0.0001
 #define ALPHA_FAST 0.000417128920021
 
-#define COUNT 10000000
+#define COUNT 1000000
+//#define COUNT 100
 
 #define ANIMATE 0
 
 int main() {
   int idx;
-  struct decaying_histogram *dhist_slow;
-  struct decaying_histogram *dhist_fast;
+  struct decaying_histogram *dhist_slow, *dhist_fast;
+  dhist_slow = dhist_fast = NULL;
 
   std::default_random_engine generator;
   std::normal_distribution<double> normal_0_1(0.0, 1.0);
@@ -54,7 +56,7 @@ int main() {
   dhist_fast = new struct decaying_histogram;
   init_decaying_histogram(dhist_fast, NUM_BUCKETS, ALPHA_FAST);
 
-  uint64_t last_timestamp, this_timestamp, stop_timestamp;
+  uint64_t last_timestamp, this_timestamp;
   double observation;
 
   int iterations = 2;
@@ -63,8 +65,8 @@ int main() {
     for (idx = 0; idx < COUNT; idx++) {
       if (idx % (COUNT / 100) == 0)
         fprintf(stderr, "%d / %d\r", idx, COUNT);
-      //observation = normal_0_1(generator);
-      observation = exponential_1(generator);
+      observation = normal_0_1(generator);
+      //observation = exponential_1(generator);
       dh_insert(dhist_slow, observation, DHIST_SINGLE_THREADED);
       dh_insert(dhist_fast, observation, DHIST_SINGLE_THREADED);
       if (iterations == 0) {
