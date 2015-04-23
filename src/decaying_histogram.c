@@ -102,8 +102,9 @@ static void redistribute(
     int final_num_buckets, double *final_weights, double *final_boundaries);
 
 static int snprint_histogram(
-    char *s_buffer, uint64_t n, const char *title, const char *xlabel,
-    uint64_t generation, double *boundaries, double *weights, int num_buckets);
+    char *s_buffer, size_t n, struct decaying_histogram *histogram,
+    const char *title, const char *xlabel, uint64_t generation,
+    double *boundaries, double *weights, int num_buckets);
 
 static double integral(int num_buckets, double *weights, double *boundaries) {
   int idx;
@@ -535,10 +536,10 @@ void dh_insert(
 // the \0) needed to print the histogram. Call again with an allocated buffer
 // to construct the string.
 int snprint_histogram(
-    char *s_buffer, uint64_t n, const char *title, const char *xlabel,
-    uint64_t generation, double *boundaries, double *weights,
-    int num_buckets) {
-  int num_chars = 0, idx;
+    char *s_buffer, size_t n, struct decaying_histogram *histogram,
+    const char *title, const char *xlabel, uint64_t generation,
+    double *boundaries, double *weights, int num_buckets) {
+  int idx, num_chars = 0;
 
   num_chars += snprintf(s_buffer + num_chars, n, "{");
   if (title) {
@@ -552,6 +553,7 @@ int snprint_histogram(
 
   num_chars +=
       snprintf(s_buffer + num_chars, n, "\"generation\": %lu, ", generation);
+  num_chars += snprintf(s_buffer + num_chars, n, "\"id\": %lu, ", histogram);
 
   num_chars += snprintf(s_buffer + num_chars, n, "\"weights\": [");
   for (idx = 0; idx < num_buckets - 1; idx++)
@@ -569,8 +571,7 @@ int snprint_histogram(
 char * get_new_histogram_json(
     struct decaying_histogram *histogram, bool estimate_ok,
     const char *title, const char *xlabel, int mp_flag) {
-  int num_buckets;
-  uint64_t num_chars;
+  int num_buckets, num_chars;
   uint64_t generation;
   double *boundaries, *weights;
   char *buffer;
@@ -580,11 +581,12 @@ char * get_new_histogram_json(
       &weights, &boundaries);
 
   num_chars = snprint_histogram(
-      NULL, 0, title, xlabel, generation, boundaries, weights, num_buckets);
-  buffer = (char *)malloc(sizeof(char) * (num_chars + 1));
-  snprint_histogram(
-      buffer, num_chars + 1, title, xlabel, generation, boundaries, weights,
+      NULL, 0, histogram, title, xlabel, generation, boundaries, weights,
       num_buckets);
+  buffer = (char *)malloc(sizeof(char) * (size_t)(num_chars + 1));
+  snprint_histogram(
+      buffer, (size_t)(num_chars + 1), histogram, title, xlabel, generation,
+      boundaries, weights, num_buckets);
 
   free(weights);
   free(boundaries);
@@ -595,8 +597,9 @@ char * get_new_histogram_json(
 double Jaccard_distance(
     struct decaying_histogram *hist1, struct decaying_histogram *hist2,
     bool estimate_ok, int mp_flag) {
-  int generation, num_buckets1, num_buckets2;
+  int num_buckets1, num_buckets2;
   int num_boundaries_union, num_buckets_redist, idx;
+  uint64_t generation;
   double *weights1, *weights2;
   double *boundaries1, *boundaries2;
   double *union_boundaries;
@@ -617,8 +620,10 @@ double Jaccard_distance(
       &num_boundaries_union, &union_boundaries);
   num_buckets_redist = num_boundaries_union - 1;
 
-  redist_weights1 = (double *)malloc(num_buckets_redist * sizeof(double));
-  redist_weights2 = (double *)malloc(num_buckets_redist * sizeof(double));
+  redist_weights1 = (double *)malloc(
+      (size_t)num_buckets_redist * sizeof(double));
+  redist_weights2 = (double *)malloc(
+      (size_t)num_buckets_redist * sizeof(double));
   redistribute(
       num_buckets1, weights1, boundaries1,
       num_buckets_redist, redist_weights1, union_boundaries);
@@ -626,25 +631,27 @@ double Jaccard_distance(
       num_buckets2, weights2, boundaries2,
       num_buckets_redist, redist_weights2, union_boundaries);
 
-  //if (num_buckets1 > 30 && num_buckets2 > 30) {
-  //  int i;
-  //  printf("===========\n");
-  //  printf("orig1: [");
-  //  for (i = 0; i < num_buckets1; i++) {
-  //    printf("<%lf> %lf ", boundaries1[i], weights1[i]);
-  //  }
-  //  printf("<%lf>]\n", boundaries1[i]);
-  //  printf("??? %lf\n", integral(num_buckets1, weights1, boundaries1));
-  //  printf("??? %lf\n", integral(num_buckets2, weights2, boundaries2));
+#if 0
+  if (num_buckets1 > 30 && num_buckets2 > 30) {
+    int i;
+    printf("===========\n");
+    printf("orig1: [");
+    for (i = 0; i < num_buckets1; i++) {
+      printf("<%lf> %lf ", boundaries1[i], weights1[i]);
+    }
+    printf("<%lf>]\n", boundaries1[i]);
+    printf("??? orig %lf\n", integral(num_buckets1, weights1, boundaries1));
+    printf("??? orig %lf\n", integral(num_buckets2, weights2, boundaries2));
 
-  //  printf("redist1: [");
-  //  for (i = 0; i < num_buckets_redist; i++) {
-  //    printf("<%lf> %lf ", union_boundaries[i], redist_weights1[i]);
-  //  }
-  //  printf("<%lf>]\n", union_boundaries[i]);
-  //  printf("??? %lf\n", integral(num_buckets_redist, redist_weights1, union_boundaries));
-  //  printf("??? %lf\n", integral(num_buckets_redist, redist_weights2, union_boundaries));
-  //}
+    printf("redist1: [");
+    for (i = 0; i < num_buckets_redist; i++) {
+      printf("<%lf> %lf ", union_boundaries[i], redist_weights1[i]);
+    }
+    printf("<%lf>]\n", union_boundaries[i]);
+    printf("??? redist %lf\n", integral(num_buckets_redist, redist_weights1, union_boundaries));
+    printf("??? redist %lf\n", integral(num_buckets_redist, redist_weights2, union_boundaries));
+  }
+#endif
 
   // Do actual work.
   union_area = intersection_area = 0.0;
@@ -733,7 +740,7 @@ void union_of_boundaries(
   double memo;
 
   *union_boundaries = (double *)malloc(
-      (num_boundaries1 + num_boundaries2) * sizeof(double));
+      (size_t)(num_boundaries1 + num_boundaries2) * sizeof(double));
 
   idx1 = idx2 = union_idx = 0;
   while (idx1 < num_boundaries1 || idx2 < num_boundaries2) {
@@ -764,7 +771,7 @@ void redistribute(
   orig_num_boundaries = orig_num_buckets + 1;
   orig_idx = 0;
   for (final_idx = 0; final_idx < final_num_buckets; final_idx++) {
-    if (orig_boundaries[orig_idx] < final_boundaries[final_idx]) {
+    if (orig_boundaries[orig_idx + 1] == final_boundaries[final_idx]) {
       // Shift the orig boundary that we're considering.
       orig_idx++;
     }
@@ -1367,7 +1374,9 @@ void assert_consistent(struct decaying_histogram *histogram) {
   }
 
   assert(num_buckets_seen == histogram->num_buckets);
-  assert(count_buckets_in_tree(histogram->root) == histogram->num_buckets);
+  assert(
+      (uint64_t)count_buckets_in_tree(histogram->root) ==
+      histogram->num_buckets);
   assert_invariant(histogram->root);
 }
 
