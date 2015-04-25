@@ -68,23 +68,30 @@ int main() {
         fprintf(stderr, "%d / %d              \r", idx, COUNT);
       //observation = normal_0_1(generator);
       observation = exponential_1(generator);
-      dh_insert(dhist_slow, observation, DHIST_SINGLE_THREADED);
-      dh_insert(dhist_fast, observation, DHIST_SINGLE_THREADED);
+      dhist_insert(dhist_slow, observation, DHIST_SINGLE_THREADED);
+      dhist_insert(dhist_fast, observation, DHIST_SINGLE_THREADED);
 
-      //histogram_json = get_new_histogram_json(
-      //      dhist_slow, true, "dhist_slow", NULL, DHIST_SINGLE_THREADED);
-      //puts(histogram_json);
-      //free(histogram_json);
+#if 0
+      if (idx % 100000 == 0) {
+        histogram_json = get_new_histogram_json(
+              dhist_slow, true, "dhist_slow", NULL, DHIST_SINGLE_THREADED);
+        puts(histogram_json);
+        free(histogram_json);
 
-      //histogram_json = get_new_histogram_json(
-      //      dhist_fast, true, "dhist_fast", NULL, DHIST_SINGLE_THREADED);
-      //puts(histogram_json);
-      //free(histogram_json);
+        histogram_json = get_new_histogram_json(
+              dhist_fast, true, "dhist_fast", NULL, DHIST_SINGLE_THREADED);
+        puts(histogram_json);
+        free(histogram_json);
+      }
+#endif
 
       if (iterations == 0) {
         printf("%lf\n",
-            Jaccard_distance(dhist_slow, dhist_fast, true,
-            DHIST_SINGLE_THREADED));
+            dhist_distance(
+              dhist_earth_movers_distance, dhist_slow, dhist_fast, true,
+              //dhist_Kolmogorov_Smirnov_statistic, dhist_slow, dhist_fast, true,
+              //dhist_Jaccard_distance, dhist_slow, dhist_fast, true,
+              DHIST_SINGLE_THREADED));
       }
     }
   }

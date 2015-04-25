@@ -47,7 +47,7 @@ def update(num, cli_args):
             weights = np.array(data['weights'])
             boundaries = np.array(data['boundaries'])
             widths = boundaries[1:] - boundaries[:-1]
-            heights = weights.astype(np.float)/widths
+            heights = weights.astype(np.float) / widths
             pyplot.fill_between(
                     boundaries.repeat(2)[1:-1], heights.repeat(2),
                     facecolor=memo["color"],

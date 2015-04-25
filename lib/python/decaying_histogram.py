@@ -47,7 +47,7 @@ class DecayingHistogram(object):
                 ctypes.c_double(alpha))
 
     def insert(self, observation):
-        self._libdhist.dh_insert(
+        self._libdhist.dhist_insert(
                 self._dhist_ptr, ctypes.c_double(observation),
                 self.DHIST_MULTI_THREADED)
 

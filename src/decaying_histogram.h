@@ -40,6 +40,12 @@ extern "C" {
 extern const int DHIST_SINGLE_THREADED;
 extern const int DHIST_MULTI_THREADED;
 
+enum dhist_distance_t {
+  dhist_Jaccard_distance,
+  dhist_Kolmogorov_Smirnov_statistic,
+  dhist_earth_movers_distance
+};
+
 struct bucket {
   // The values for count, mu, update_generation and the below and above
   // pointers are protected by bucket->boundary_mtx and
@@ -85,7 +91,7 @@ void init_decaying_histogram(
     struct decaying_histogram *histogram, int target_buckets,
     double alpha);
 void clean_decaying_histogram(struct decaying_histogram *histogram);
-void dh_insert(
+void dhist_insert(
     struct decaying_histogram *histogram, double observation, int mp_flag);
 /*
  * This returns the bucket with the greatest mu less than observation (which is
@@ -105,13 +111,8 @@ double weight(
 void decay(
     struct decaying_histogram *histogram, struct bucket *bucket,
     uint64_t generation);
-double Jaccard_distance(
-    struct decaying_histogram *hist1, struct decaying_histogram *hist2,
-    bool estimate_ok, int mp_flag);
-double Kolomogorov_Smirnov_statistic(
-    struct decaying_histogram *hist1, struct decaying_histogram *hist2,
-    bool estimate_ok, int mp_flag);
-double Wasserstein_distance(
+double dhist_distance(
+    enum dhist_distance_t distance_name,
     struct decaying_histogram *hist1, struct decaying_histogram *hist2,
     bool estimate_ok, int mp_flag);
 char * get_new_histogram_json(

@@ -469,7 +469,7 @@ struct bucket * find_bucket(
   return NULL;
 }
 
-void dh_insert(
+void dhist_insert(
     struct decaying_histogram *histogram, double observation, int mp_flag) {
   struct bucket *bucket;
   bool add_succeeded;
@@ -594,7 +594,8 @@ char * get_new_histogram_json(
   return buffer;
 }
 
-double Jaccard_distance(
+double dhist_distance(
+    enum dhist_distance_t distance_name,
     struct decaying_histogram *hist1, struct decaying_histogram *hist2,
     bool estimate_ok, int mp_flag) {
   int num_buckets1, num_buckets2;
@@ -604,7 +605,7 @@ double Jaccard_distance(
   double *boundaries1, *boundaries2;
   double *union_boundaries;
   double *redist_weights1, *redist_weights2;
-  double distance, union_area, intersection_area, width;
+  double distance, burden, step, union_area, intersection_area, width, cdf[2];
 
   // Prepare comparison.
   extract_info(
@@ -631,37 +632,46 @@ double Jaccard_distance(
       num_buckets2, weights2, boundaries2,
       num_buckets_redist, redist_weights2, union_boundaries);
 
-#if 0
-  if (num_buckets1 > 30 && num_buckets2 > 30) {
-    int i;
-    printf("===========\n");
-    printf("orig1: [");
-    for (i = 0; i < num_buckets1; i++) {
-      printf("<%lf> %lf ", boundaries1[i], weights1[i]);
-    }
-    printf("<%lf>]\n", boundaries1[i]);
-    printf("??? orig %lf\n", integral(num_buckets1, weights1, boundaries1));
-    printf("??? orig %lf\n", integral(num_buckets2, weights2, boundaries2));
-
-    printf("redist1: [");
-    for (i = 0; i < num_buckets_redist; i++) {
-      printf("<%lf> %lf ", union_boundaries[i], redist_weights1[i]);
-    }
-    printf("<%lf>]\n", union_boundaries[i]);
-    printf("??? redist %lf\n", integral(num_buckets_redist, redist_weights1, union_boundaries));
-    printf("??? redist %lf\n", integral(num_buckets_redist, redist_weights2, union_boundaries));
-  }
-#endif
-
   // Do actual work.
-  union_area = intersection_area = 0.0;
-  for (idx = 0; idx < num_buckets_redist; idx++) {
-    width = union_boundaries[idx + 1] - union_boundaries[idx];
-    union_area += width * MAX(redist_weights1[idx], redist_weights2[idx]);
-    intersection_area +=
-        width * MIN(redist_weights1[idx], redist_weights2[idx]);
+  switch (distance_name) {
+  case dhist_Jaccard_distance:
+    union_area = intersection_area = 0.0;
+    for (idx = 0; idx < num_buckets_redist; idx++) {
+      width = union_boundaries[idx + 1] - union_boundaries[idx];
+      union_area += width * MAX(redist_weights1[idx], redist_weights2[idx]);
+      intersection_area +=
+          width * MIN(redist_weights1[idx], redist_weights2[idx]);
+    }
+    distance = 1.0 - intersection_area / union_area;
+    break;
+
+  case dhist_Kolmogorov_Smirnov_statistic:
+    distance = cdf[0] = cdf[1] = 0.0;
+    for (idx = 0; idx < num_buckets_redist; idx++) {
+      width = union_boundaries[idx + 1] - union_boundaries[idx];
+      cdf[0] += width * redist_weights1[idx];
+      cdf[1] += width * redist_weights2[idx];
+      if (ABS(cdf[1] - cdf[0]) > distance)
+        distance = ABS(cdf[1] - cdf[0]);
+    }
+    break;
+
+  case dhist_earth_movers_distance:
+    distance = burden = step = 0.0;
+    for (idx = 0; idx < num_buckets_redist - 1; idx++) {
+      burden += redist_weights2[idx] - redist_weights1[idx];
+      // step is distance between above bucket's mean and this bucket's mean.
+      step = (
+          (union_boundaries[idx + 2] + union_boundaries[idx + 1]) / 2.0 -
+          (union_boundaries[idx + 1] + union_boundaries[idx]) / 2.0);
+      distance += ABS(burden) * step;
+    }
+    break;
+
+  defaut:
+    assert(false);
+    break;
   }
-  distance = 1.0 - intersection_area / union_area;
 
   // Cleanup.
   free(weights1);
@@ -673,23 +683,6 @@ double Jaccard_distance(
   free(redist_weights2);
 
   return distance;
-}
-
-double Kolomogorov_Smirnov_statistic(
-    struct decaying_histogram *hist1, struct decaying_histogram *hist2,
-    bool estimate_ok, int mp_flag) {
-  assert(hist1 && hist2);
-  assert(false);
-  return 0.0;
-}
-
-// AKA the earth mover's distance.
-double Wasserstein_distance(
-    struct decaying_histogram *hist1, struct decaying_histogram *hist2,
-    bool estimate_ok, int mp_flag) {
-  assert(hist1 && hist2);
-  assert(false);
-  return 0.0;
 }
 
 // XXX Implement estimate_ok

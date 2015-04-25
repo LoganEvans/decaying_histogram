@@ -90,7 +90,7 @@ thread_func(void *args) {
       start_timestamp = rdtsc();
       buffer[malloc_idx] = (char *)malloc(bytes_per_malloc);
       stop_timestamp = rdtsc();
-      dh_insert(
+      dhist_insert(
           g_histogram, log2(stop_timestamp - start_timestamp),
           DHIST_MULTI_THREADED);
     } else {

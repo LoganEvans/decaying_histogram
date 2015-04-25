@@ -76,10 +76,10 @@ thread_func(void *args) {
 #endif
     this_timestamp = rdtsc();
 #if NORMAL_DISTRIBUTION
-    dh_insert(
+    dhist_insert(
         g_histogram, g_distribution(g_generator), DHIST_MP_FLAG);
 #else
-    dh_insert(
+    dhist_insert(
         g_histogram, log2(this_timestamp - last_timestamp), DHIST_MP_FLAG);
 #endif
     last_timestamp = this_timestamp;
