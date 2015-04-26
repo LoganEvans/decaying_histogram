@@ -42,16 +42,20 @@ def update(num, cli_args):
     if "xlabel" in new_data:
         pyplot.xlabel(new_data["xlabel"])
 
+    ymax = None
     for memo in update.memos.values():
         for idx, data in enumerate(reversed(memo["history"])):
             weights = np.array(data['weights'])
             boundaries = np.array(data['boundaries'])
             widths = boundaries[1:] - boundaries[:-1]
-            heights = weights.astype(np.float) / widths
+            max_weights = max(weights)
+            if ymax is None or max_weights > ymax:
+                ymax = max_weights
             pyplot.fill_between(
-                    boundaries.repeat(2)[1:-1], heights.repeat(2),
+                    boundaries.repeat(2)[1:-1], weights.repeat(2),
                     facecolor=memo["color"],
                     alpha=cli_args.alpha * ((idx + 1.0) / len(memo["history"])))
+    pyplot.ylim(0, ymax)
 update.memos = {}
 
 if __name__ == '__main__':

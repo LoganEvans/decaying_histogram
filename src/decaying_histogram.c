@@ -55,6 +55,9 @@ static double get_decay(
 static double compute_bound(
     struct decaying_histogram *histogram,
     struct bucket *left, struct bucket *right);
+static void compute_both_bounds(
+    struct decaying_histogram *histogram,
+    struct bucket *bucket, double *lower_bound, double *upper_bound);
 static double compute_count(
     struct decaying_histogram *histogram, struct bucket *bucket,
     uint64_t generation);
@@ -257,8 +260,7 @@ double weight(
     double *lower_bound_output, double *upper_bound_output) {
   double lower_bound, upper_bound, retval;
 
-  lower_bound = compute_bound(histogram, bucket->below, bucket);
-  upper_bound = compute_bound(histogram, bucket, bucket->above);
+  compute_both_bounds(histogram, bucket, &lower_bound, &upper_bound);
 
   if (lower_bound_output != NULL)
     *lower_bound_output = lower_bound;
@@ -337,6 +339,24 @@ double compute_bound(
   return (
       (mu_left * count_left + mu_right * count_right) /
       (count_left + count_right));
+}
+
+static void compute_both_bounds(
+    struct decaying_histogram *histogram,
+    struct bucket *bucket, double *lower_bound, double *upper_bound) {
+  if (!bucket->below && ! bucket->above) {
+    *lower_bound = bucket->mu - 0.5;
+    *upper_bound = bucket->mu + 0.5;
+  } else if (!bucket->below) {
+    *upper_bound = compute_bound(histogram, bucket, bucket->above);
+    *lower_bound = bucket->mu - (*upper_bound - bucket->mu);
+  } else if (!bucket->above) {
+    *lower_bound = compute_bound(histogram, bucket->below, bucket);
+    *upper_bound = bucket->mu + (bucket->mu - *lower_bound);
+  } else {
+    *lower_bound = compute_bound(histogram, bucket->below, bucket);
+    *upper_bound = compute_bound(histogram, bucket, bucket->above);
+  }
 }
 
 bool perform_add(
@@ -1058,8 +1078,12 @@ void _split_bucket(
     // a bucket again until this happens.
     new_bucket->mu = bucket->mu;
   } else {
-    lower_bound = compute_bound(histogram, new_bucket->below, bucket);
     upper_bound = compute_bound(histogram, bucket, bucket->above);
+    if (!new_bucket->below) {
+      lower_bound = bucket->mu - (upper_bound - bucket->mu);
+    } else {
+      lower_bound = compute_bound(histogram, new_bucket->below, bucket);
+    }
     diameter = upper_bound - lower_bound;
     median = lower_bound + diameter / 2.0;
     new_bucket->mu = median - diameter / 6.0;
