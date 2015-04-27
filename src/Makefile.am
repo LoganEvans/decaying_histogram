@@ -4,7 +4,8 @@ AM_LDFLAGS = -pthread -lm
 bin_PROGRAMS = main profile_malloc distance_comparison
 lib_LTLIBRARIES = libdhistlib.la
 
-libdhistlib_la_SOURCES = decaying_histogram.c
+libdhistlib_la_SOURCES = dhist.c
+libdhistlib_la_CFLAGS = -Wno-float-equal -Wno-covered-switch-default
 
 main_SOURCES = main.cpp
 main_LDADD = libdhistlib.la

@@ -1,10 +1,10 @@
+#!/usr/bin/env python
+
 from matplotlib import pyplot
 import numpy as np
 import sys
 import json
 
-print '===='
-print sys.argv[1]
 histograms = [json.loads(line.strip()) for line in sys.argv[1].splitlines()]
 for histogram in histograms:
     weights = np.array(histogram["weights"])

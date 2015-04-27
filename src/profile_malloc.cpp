@@ -30,7 +30,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <pthread.h>
-#include "decaying_histogram.h"
+#include "dhist.h"
 #include <random>
 
 #define NUM_BUCKETS 30
@@ -43,7 +43,7 @@
 #define MAX_NUM_THREADS 200
 #define CONSTANT_SPACE_PER_TRIAL 0
 
-static struct decaying_histogram *g_histogram;
+static struct dhist *g_histogram;
 
 static uint64_t rdtsc()
 {
@@ -120,8 +120,7 @@ int main() {
   args.permitted_bytes = PERMITTED_BYTES / MAX_NUM_THREADS;
   args.bytes_per_malloc = BYTES_PER_MALLOC;
 
-  g_histogram = new struct decaying_histogram;
-  init_decaying_histogram(g_histogram, NUM_BUCKETS, ALPHA);
+  g_histogram = dhist_init(NUM_BUCKETS, ALPHA);
 
   for (int num_threads = 1; num_threads < MAX_NUM_THREADS; num_threads++) {
     sprintf(title, "threads: %d", num_threads);
@@ -135,7 +134,7 @@ int main() {
 
     while (rdtsc() < args.end_timestamp) {
       nanosleep(&tim , &tim2);
-      histogram_json = get_new_histogram_json(
+      histogram_json = dhist_get_json(
           g_histogram, true, "Test", "log_2(insertion time)",
           DHIST_MULTI_THREADED);
       puts(histogram_json);
@@ -147,8 +146,7 @@ int main() {
       pthread_join(threads[i], NULL);
   }
 
-  //clean_decaying_histogram(g_histogram);
-  //delete g_histogram;
+  dhist_destroy(g_histogram);
 
   return 0;
 }

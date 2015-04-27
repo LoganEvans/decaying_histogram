@@ -29,6 +29,7 @@
 #include <random>
 
 #include "decaying_histogram.h"
+#include "decaying_histogram.c"
 #include "gtest/gtest.h"
 
 
@@ -57,6 +58,17 @@ class HistogramTest : public testing::Test {
   double alpha_;
   int target_buckets_;
 };
+
+static double integral(int num_buckets, double *weights, double *boundaries) {
+  int idx;
+  double res = 0.0;
+
+  for (idx = 0; idx < num_buckets; idx++) {
+    res += weights[idx] * (boundaries[idx + 1] - boundaries[idx]);
+  }
+
+  return res;
+}
 
 TEST_F(HistogramTest, TargetBoundary) {
   int num_buckets;

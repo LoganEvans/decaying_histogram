@@ -29,8 +29,8 @@
 #include <assert.h>
 #include <math.h>
 #include <stdio.h>
-#include "decaying_histogram.h"
 #include <random>
+#include "dhist.h"
 
 #define NUM_BUCKETS 50
 #define ALPHA_SLOW 0.0001
@@ -44,18 +44,15 @@
 int main() {
   int idx;
   char *histogram_json;
-  struct decaying_histogram *dhist_slow, *dhist_fast;
+  struct dhist *dhist_slow, *dhist_fast;
   dhist_slow = dhist_fast = NULL;
 
   std::default_random_engine generator;
   std::normal_distribution<double> normal_0_1(0.0, 1.0);
   std::exponential_distribution<double> exponential_1(1.0);
 
-  dhist_slow = new struct decaying_histogram;
-  init_decaying_histogram(dhist_slow, NUM_BUCKETS, ALPHA_SLOW);
-
-  dhist_fast = new struct decaying_histogram;
-  init_decaying_histogram(dhist_fast, NUM_BUCKETS, ALPHA_FAST);
+  dhist_slow = dhist_init(NUM_BUCKETS, ALPHA_SLOW);
+  dhist_fast = dhist_init(NUM_BUCKETS, ALPHA_FAST);
 
   uint64_t last_timestamp, this_timestamp;
   double observation;
@@ -66,8 +63,8 @@ int main() {
     for (idx = 0; idx < COUNT; idx++) {
       if (idx % (COUNT / 100) == 0)
         fprintf(stderr, "%d / %d              \r", idx, COUNT);
-      observation = normal_0_1(generator);
-      //observation = exponential_1(generator);
+      //observation = normal_0_1(generator);
+      observation = exponential_1(generator);
       dhist_insert(dhist_slow, observation, DHIST_SINGLE_THREADED);
       dhist_insert(dhist_fast, observation, DHIST_SINGLE_THREADED);
 
@@ -97,6 +94,9 @@ int main() {
 #endif
     }
   }
+
+  dhist_destroy(dhist_slow);
+  dhist_destroy(dhist_fast);
 
   return 0;
 }

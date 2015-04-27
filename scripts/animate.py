@@ -9,7 +9,7 @@ from matplotlib import pyplot
 import matplotlib.animation as animation
 
 _color_order = [
-        "blue", "green", "red", "cyan", "magenta", "yellow", "black"]
+        "steelblue", "green", "red", "cyan", "magenta", "yellow", "black"]
 
 def parse_options():
     parser = argparse.ArgumentParser()

@@ -25,8 +25,8 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 AC_PREREQ([2.69])
-AC_INIT([decaying-histogram], [0.7.0], [loganpevans@gmail.com])
-AC_CONFIG_SRCDIR([src/decaying_histogram.h])
+AC_INIT([decaying-histogram], [0.8.0], [loganpevans@gmail.com])
+AC_CONFIG_SRCDIR([src])
 AC_CONFIG_MACRO_DIR([m4])
 AC_CONFIG_HEADERS([config.h])
 AC_CONFIG_AUX_DIR([build-aux])

@@ -29,10 +29,10 @@
 #include <math.h>
 #include <stdio.h>
 #include <pthread.h>
-#include "decaying_histogram.h"
+#include "dhist.h"
 #include <random>
 
-#define NUM_BUCKETS 200
+#define NUM_BUCKETS 50
 #define NUM_THREADS 1
 #define ALPHA 0.000001
 
@@ -43,9 +43,9 @@
 #define FRAMES_PER_SECOND 5
 
 #define ANIMATE 0
-#define NORMAL_DISTRIBUTION 1
+#define NORMAL_DISTRIBUTION 0
 
-static struct decaying_histogram *g_histogram;
+static struct dhist *g_histogram;
 
 #if NORMAL_DISTRIBUTION
 std::default_random_engine g_generator;
@@ -99,8 +99,7 @@ int main() {
 
   args.stop_timestamp = rdtsc() + CYCLES;
 
-  g_histogram = new struct decaying_histogram;
-  init_decaying_histogram(g_histogram, NUM_BUCKETS, ALPHA);
+  g_histogram = dhist_init(NUM_BUCKETS, ALPHA);
 
   for (int i = 0; i < NUM_THREADS; i++)
     pthread_create(
@@ -109,7 +108,7 @@ int main() {
 #if ANIMATE
   while (1) {
     nanosleep(&tim , &tim2);
-    histogram_json = get_new_histogram_json(
+    histogram_json = dhist_get_json(
         g_histogram, true, "Test", "log_2(insertion time)", DHIST_MP_FLAG);
     puts(histogram_json);
     free(histogram_json);
@@ -120,12 +119,11 @@ int main() {
   for (int i = 0; i < NUM_THREADS; i++)
     pthread_join(threads[i], NULL);
 
-  histogram_json = get_new_histogram_json(
+  histogram_json = dhist_get_json(
       g_histogram, true, "Test", "log_2(insertion time)", DHIST_MP_FLAG);
   puts(histogram_json);
   free(histogram_json);
-  //clean_decaying_histogram(g_histogram);
-  //delete g_histogram;
+  dhist_destroy(g_histogram);
 
   return 0;
 }
