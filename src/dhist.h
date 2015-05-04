@@ -50,7 +50,9 @@ struct dhist {
   double delete_bucket_threshold;
   double split_bucket_threshold;
   double alpha;
+  double total_count;
   uint64_t generation;
+  uint64_t total_count_generation;
   struct bucket *root;
   // The bucket_list is a pool of buckets that are allocated at initialization
   // time. The length will be max_num_buckets.

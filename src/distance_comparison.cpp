@@ -36,7 +36,7 @@
 #define ALPHA_SLOW 0.0001
 #define ALPHA_FAST 0.000417128920021
 
-#define COUNT 10000000
+#define COUNT 1000000
 //#define COUNT 100
 
 #define ANIMATE 0
@@ -63,12 +63,12 @@ int main() {
     for (idx = 0; idx < COUNT; idx++) {
       if (idx % (COUNT / 100) == 0)
         fprintf(stderr, "%d / %d              \r", idx, COUNT);
-      //observation = normal_0_1(generator);
-      observation = exponential_1(generator);
+      observation = normal_0_1(generator);
+      //observation = exponential_1(generator);
       dhist_insert(dhist_slow, observation, DHIST_SINGLE_THREADED);
       dhist_insert(dhist_fast, observation, DHIST_SINGLE_THREADED);
 
-#if 0
+#if ANIMATE
       if (idx % 10000 == 0) {
         histogram_json = get_new_histogram_json(
               dhist_slow, true, "dhist_slow", NULL, DHIST_SINGLE_THREADED);
@@ -82,13 +82,13 @@ int main() {
       }
 #endif
 
-#if 1
+#if !ANIMATE
       if (iterations == 0) {
         printf("%lf\n",
             dhist_distance(
               //dhist_earth_movers_distance, dhist_slow, dhist_fast, true,
-              dhist_Kolmogorov_Smirnov_statistic, dhist_slow, dhist_fast, true,
-              //dhist_Jaccard_distance, dhist_slow, dhist_fast, true,
+              //dhist_Kolmogorov_Smirnov_statistic, dhist_slow, dhist_fast, true,
+              dhist_Jaccard_distance, dhist_slow, dhist_fast, true,
               DHIST_SINGLE_THREADED));
       }
 #endif

@@ -75,6 +75,15 @@ struct bucket {
   char __padding[2];
 };
 
+struct dhist_info {
+  struct dhist *histogram;
+  double *weights;
+  double *boundaries;
+  uint64_t generation;
+  int num_buckets;
+  int num_boundaries;
+};
+
 static double ipow(double coefficient, uint64_t power);
 
 static struct bucket * init_bucket(struct dhist *histogram, int mp_flag);
@@ -98,12 +107,10 @@ static uint64_t get_generation(
     struct dhist *histogram, bool increment, int mp_flag);
 static double compute_bound(
     struct dhist *histogram, struct bucket *left, struct bucket *right);
-static void compute_both_bounds(
-    struct dhist *histogram,
-    struct bucket *bucket, double *lower_bound, double *upper_bound);
 static double compute_count(
     struct dhist *histogram, struct bucket *bucket, uint64_t generation);
-static double total_count(struct dhist *histogram, uint64_t generation);
+static double compute_total_count(
+    struct dhist *histogram, uint64_t generation);
 static bool perform_add(
     struct dhist *histogram, struct bucket *bucket,
     double observation, bool recheck_left_boundary,
@@ -124,29 +131,23 @@ static void delete_bucket(
     struct dhist *histogram, struct bucket *bucket, int mp_flag);
 static void _delete_bucket(
     struct dhist *histogram, struct bucket *bucket, int mp_flag);
-static double weight(
-    struct dhist *histogram, struct bucket *bucket,
-    uint64_t generation,
-    double *lower_bound_output, double *upper_bound_output);
 static void decay(
-    struct dhist *histogram, struct bucket *bucket,
-    uint64_t generation);
-static void extract_info(
-    struct dhist *histogram, bool estimate_ok, int mp_flag, int *num_buckets,
-    uint64_t *generation, double **weights, double **boundaries);
+    struct dhist *histogram, struct bucket *bucket, uint64_t generation);
 static int snprint_histogram(
-    char *s_buffer, size_t n, struct dhist *histogram,
-    const char *title, const char *xlabel, uint64_t generation,
-    double *boundaries, double *weights, int num_buckets);
+    char *s_buffer, size_t n, struct dhist_info *info, const char *title,
+    const char *xlabel);
 static void assert_consistent(struct dhist *histogram);
 
+static void extract_info(
+    struct dhist *histogram, bool estimate_ok, int mp_flag,
+    struct dhist_info *info);
 static void union_of_boundaries(
-    int num_boundaries1, double *boundaries1,
-    int num_boundaries2, double *boundaries2,
-    int *num_boundaries_union, double **union_boundaries);
+    struct dhist_info *info1, struct dhist_info *info2,
+    struct dhist_info *info_union);
 static void redistribute(
-    int orig_num_buckets, double *orig_weights, double *orig_boundaries,
-    int final_num_buckets, double *final_weights, double *final_boundaries);
+    struct dhist_info *info_orig, struct dhist_info *info_union,
+    struct dhist_info *info_redist);
+static void clean_info(struct dhist_info *info);
 
 
 const int DHIST_SINGLE_THREADED = (1 << 0);
@@ -156,14 +157,14 @@ const int DHIST_MULTI_THREADED = (1 << 1);
 struct dhist *
 dhist_init(int target_buckets, double alpha) {
   struct dhist *histogram;
-  double max_total_count, expected_count;
+  double max_count, expected_count;
   uint64_t idx;
   struct bucket *bucket;
   double radius;
 
   histogram = (struct dhist *)malloc(sizeof(struct dhist));
 
-  max_total_count = 1.0 / alpha;
+  max_count = 1.0 / alpha;
   expected_count = 1.0 / (alpha * target_buckets);
 
   // XXX(LPE): What are good thresholds?
@@ -172,7 +173,7 @@ dhist_init(int target_buckets, double alpha) {
   histogram->split_bucket_threshold = expected_count * (1.0 + radius);
   histogram->alpha = alpha;
   histogram->max_num_buckets =
-      (uint32_t)CEIL(max_total_count, histogram->delete_bucket_threshold);
+      (uint32_t)CEIL(max_count, histogram->delete_bucket_threshold);
   histogram->bucket_list = (struct bucket *)malloc(
       histogram->max_num_buckets * sizeof(struct bucket));
   for (idx = 0; idx < histogram->max_num_buckets; idx++) {
@@ -260,6 +261,8 @@ void dhist_insert(
     } else {
       // No bucket exists to the right, and since we already have the boundary
       // mutex for this bucket, nothing else can add a bucket to the right.
+
+      // XXX split and delete_bucket should lock far left and far right buckets
       add_succeeded = perform_add(
           histogram, bucket, observation, false, false, mp_flag);
     }
@@ -280,25 +283,16 @@ void dhist_insert(
 char * dhist_get_json(
     struct dhist *histogram, bool estimate_ok,
     const char *title, const char *xlabel, int mp_flag) {
-  int num_buckets, num_chars;
-  uint64_t generation;
-  double *boundaries, *weights;
+  int num_chars;
+  struct dhist_info info;
   char *buffer;
 
-  extract_info(
-      histogram, estimate_ok, mp_flag, &num_buckets, &generation,
-      &weights, &boundaries);
-
-  num_chars = snprint_histogram(
-      NULL, 0, histogram, title, xlabel, generation, boundaries, weights,
-      num_buckets);
+  extract_info(histogram, estimate_ok, mp_flag, &info);
+  num_chars = snprint_histogram(NULL, 0, &info, title, xlabel);
   buffer = (char *)malloc(sizeof(char) * (size_t)(num_chars + 1));
   snprint_histogram(
-      buffer, (size_t)(num_chars + 1), histogram, title, xlabel, generation,
-      boundaries, weights, num_buckets);
-
-  free(weights);
-  free(boundaries);
+      buffer, (size_t)(num_chars + 1), &info, title, xlabel);
+  clean_info(&info);
 
   return buffer;
 }
@@ -315,59 +309,37 @@ double dhist_distance(
     enum dhist_distance_t distance_name,
     struct dhist *hist1, struct dhist *hist2,
     bool estimate_ok, int mp_flag) {
-  int num_buckets1, num_buckets2;
-  int num_boundaries_union, num_buckets_redist, idx;
-  uint64_t generation;
-  double *weights1, *weights2;
-  double *boundaries1, *boundaries2;
-  double *union_boundaries;
-  double *redist_weights1, *redist_weights2;
+  int idx;
+  struct dhist_info info1, info2, info_union, info1_redist, info2_redist;
   double distance, burden, step, union_area, intersection_area, width, cdf[2];
 
   // Prepare comparison.
-  extract_info(
-      hist1, estimate_ok, mp_flag,
-      &num_buckets1, &generation, &weights1, &boundaries1);
-  extract_info(
-      hist2, estimate_ok, mp_flag,
-      &num_buckets2, &generation, &weights2, &boundaries2);
-
-  union_of_boundaries(
-      num_buckets1 + 1, boundaries1,
-      num_buckets2 + 1, boundaries2,
-      &num_boundaries_union, &union_boundaries);
-  num_buckets_redist = num_boundaries_union - 1;
-
-  redist_weights1 = (double *)malloc(
-      (size_t)num_buckets_redist * sizeof(double));
-  redist_weights2 = (double *)malloc(
-      (size_t)num_buckets_redist * sizeof(double));
-  redistribute(
-      num_buckets1, weights1, boundaries1,
-      num_buckets_redist, redist_weights1, union_boundaries);
-  redistribute(
-      num_buckets2, weights2, boundaries2,
-      num_buckets_redist, redist_weights2, union_boundaries);
+  extract_info(hist1, estimate_ok, mp_flag, &info1);
+  extract_info(hist2, estimate_ok, mp_flag, &info2);
+  union_of_boundaries(&info1, &info2, &info_union);
+  redistribute(&info1, &info_union, &info1_redist);
+  redistribute(&info2, &info_union, &info2_redist);
 
   // Do actual work.
   switch (distance_name) {
   case dhist_Jaccard_distance:
     union_area = intersection_area = 0.0;
-    for (idx = 0; idx < num_buckets_redist; idx++) {
-      width = union_boundaries[idx + 1] - union_boundaries[idx];
-      union_area += width * MAX(redist_weights1[idx], redist_weights2[idx]);
+    for (idx = 0; idx < info_union.num_buckets; idx++) {
+      width = info_union.boundaries[idx + 1] - info_union.boundaries[idx];
+      union_area +=
+          width * MAX(info1_redist.weights[idx], info2_redist.weights[idx]);
       intersection_area +=
-          width * MIN(redist_weights1[idx], redist_weights2[idx]);
+          width * MIN(info1_redist.weights[idx], info2_redist.weights[idx]);
     }
     distance = 1.0 - intersection_area / union_area;
     break;
 
   case dhist_Kolmogorov_Smirnov_statistic:
     distance = cdf[0] = cdf[1] = 0.0;
-    for (idx = 0; idx < num_buckets_redist; idx++) {
-      width = union_boundaries[idx + 1] - union_boundaries[idx];
-      cdf[0] += width * redist_weights1[idx];
-      cdf[1] += width * redist_weights2[idx];
+    for (idx = 0; idx < info_union.num_buckets; idx++) {
+      width = info_union.boundaries[idx + 1] - info_union.boundaries[idx];
+      cdf[0] += width * info1_redist.weights[idx];
+      cdf[1] += width * info2_redist.weights[idx];
       if (ABS(cdf[1] - cdf[0]) > distance)
         distance = ABS(cdf[1] - cdf[0]);
     }
@@ -375,12 +347,14 @@ double dhist_distance(
 
   case dhist_earth_movers_distance:
     distance = burden = step = 0.0;
-    for (idx = 0; idx < num_buckets_redist - 1; idx++) {
-      burden += redist_weights2[idx] - redist_weights1[idx];
+    for (idx = 0; idx < info_union.num_buckets - 1; idx++) {
+      burden += info2_redist.weights[idx] - info1_redist.weights[idx];
       // step is distance between above bucket's mean and this bucket's mean.
       step = (
-          (union_boundaries[idx + 2] + union_boundaries[idx + 1]) / 2.0 -
-          (union_boundaries[idx + 1] + union_boundaries[idx]) / 2.0);
+          (info_union.boundaries[idx + 2] +
+           info_union.boundaries[idx + 1]) / 2.0 -
+          (info_union.boundaries[idx + 1] +
+           info_union.boundaries[idx]) / 2.0);
       distance += ABS(burden) * step;
     }
     break;
@@ -391,13 +365,11 @@ double dhist_distance(
   }
 
   // Cleanup.
-  free(weights1);
-  free(weights2);
-  free(boundaries1);
-  free(boundaries2);
-  free(union_boundaries);
-  free(redist_weights1);
-  free(redist_weights2);
+  clean_info(&info1);
+  clean_info(&info2);
+  clean_info(&info_union);
+  clean_info(&info1_redist);
+  clean_info(&info2_redist);
 
   return distance;
 }
@@ -562,6 +534,8 @@ unlock_boundary(struct bucket *bucket, int mp_flag) {
 
 static void
 _print_tree(struct bucket *bucket, int depth) {
+  int i;
+
   printf("%.2lf", bucket->mu);
 
   if (bucket->children[0]) {
@@ -571,7 +545,7 @@ _print_tree(struct bucket *bucket, int depth) {
 
   if (bucket->children[1]) {
     printf("\n");
-    for (int i = 0; i < depth; i++)
+    for (i = 0; i < depth; i++)
       printf("\t");
     printf("\t\\ ");
     _print_tree(bucket->children[1], depth + 1);
@@ -630,7 +604,7 @@ count_buckets_in_tree(struct bucket *root) {
 
 static int
 assert_invariant(struct bucket *root) {
-  int left, right;
+  int left, right, dir;
 
   if (root == NULL) {
     return 0;
@@ -678,7 +652,7 @@ assert_invariant(struct bucket *root) {
       assert(false);
     }
 
-    for (int dir = 0; dir <= 1; dir++) {
+    for (dir = 0; dir <= 1; dir++) {
       if (root->children[dir] && root->children[dir]->parent != root) {
         assert(false);
       }
@@ -762,25 +736,6 @@ compute_bound(
       (count_left + count_right));
 }
 
-static void
-compute_both_bounds(
-    struct dhist *histogram,
-    struct bucket *bucket, double *lower_bound, double *upper_bound) {
-  if (!bucket->below && ! bucket->above) {
-    *lower_bound = bucket->mu - 0.5;
-    *upper_bound = bucket->mu + 0.5;
-  } else if (!bucket->below) {
-    *upper_bound = compute_bound(histogram, bucket, bucket->above);
-    *lower_bound = bucket->mu - (*upper_bound - bucket->mu);
-  } else if (!bucket->above) {
-    *lower_bound = compute_bound(histogram, bucket->below, bucket);
-    *upper_bound = bucket->mu + (bucket->mu - *lower_bound);
-  } else {
-    *lower_bound = compute_bound(histogram, bucket->below, bucket);
-    *upper_bound = compute_bound(histogram, bucket, bucket->above);
-  }
-}
-
 static double compute_count(
     struct dhist *histogram, struct bucket *bucket, uint64_t generation) {
   return (
@@ -788,7 +743,7 @@ static double compute_count(
       get_decay(histogram, generation - bucket->update_generation));
 }
 
-static double total_count(struct dhist *histogram, uint64_t generation) {
+static double compute_total_count(struct dhist *histogram, uint64_t generation) {
   return (1 - get_decay(histogram, generation)) /
          histogram->alpha;
 }
@@ -1205,38 +1160,6 @@ _delete_bucket(struct dhist *histogram, struct bucket *bucket, int mp_flag) {
 }
 
 /*
- * This is a bit of a misnomer... this doesn't return the height of the bar,
- * but instead returns the area of the bar.
- *
- * If generation == 0, this will provide the density estimate using the last
- * update generation as to compute the count.
- */
-static double
-weight(
-    struct dhist *histogram, struct bucket *bucket, uint64_t generation,
-    double *lower_bound_output, double *upper_bound_output) {
-  double lower_bound, upper_bound, retval;
-
-  compute_both_bounds(histogram, bucket, &lower_bound, &upper_bound);
-
-  if (lower_bound_output != NULL)
-    *lower_bound_output = lower_bound;
-  if (upper_bound_output != NULL)
-    *upper_bound_output = upper_bound;
-
-  if (bucket->update_generation <= generation) {
-    decay(histogram, bucket, generation);
-    retval = bucket->count / total_count(histogram, generation);
-  } else {
-    retval =
-        bucket->count / total_count(histogram, bucket->update_generation);
-  }
-  retval /= upper_bound - lower_bound;
-
-  return retval;
-}
-
-/*
  * This can efficiently apply the decay for multiple generations. This function
  * will not read histogram->generation since that may be updated by another
  * thread.
@@ -1251,44 +1174,73 @@ decay(struct dhist *histogram, struct bucket *bucket, uint64_t generation) {
   bucket->update_generation = generation;
 }
 
-// TODO Implement estimate_ok
-static void
-extract_info(
-    struct dhist *histogram, bool estimate_ok, int mp_flag, int *num_buckets,
-    uint64_t *generation, double **weights, double **boundaries) {
-  int idx;
+static void extract_info(
+    struct dhist *histogram, bool estimate_ok, int mp_flag,
+    struct dhist_info *info) {
   struct bucket *bucket;
+  double total_count;
+  int idx;
+
+  info->histogram = histogram;
 
   if (mp_flag & DHIST_MULTI_THREADED)
     pthread_mutex_lock(histogram->tree_mtx);
 
-  *weights = (double *)malloc(sizeof(double) * histogram->max_num_buckets);
-  *boundaries = (double *)malloc(
-      sizeof(double) * (histogram->max_num_buckets + 1));
+  // Allocate enough space for both the weights and the boundaries.
+  info->weights = (double *)malloc(
+      sizeof(double) * 2 * histogram->max_num_buckets + 1);
+  info->boundaries = info->weights + histogram->max_num_buckets;
 
-  *generation = get_generation(histogram, false, mp_flag);
+  info->generation = get_generation(histogram, false, mp_flag);
 
   bucket = histogram->root;
   while (bucket->below)
     bucket = bucket->below;
 
+  // First, populate weights with the raw counts and identify bucket
+  // boundaries. Then compute the total count of all observations.
+  // Finally, convert the raw counts into the weights.
+
   idx = 0;
-  while (1) {
-    lock_boundary(bucket, mp_flag);
-    (*weights)[idx] = weight(
-        histogram, bucket, *generation,
-        &(*boundaries)[idx], &(*boundaries)[idx + 1]);
+  lock_boundary(bucket, mp_flag);
+  info->boundaries[idx] = compute_bound(histogram, NULL, bucket);
+  while (bucket) {
+    if (bucket->above)
+      lock_boundary(bucket->above, mp_flag);
+    info->boundaries[idx + 1] = compute_bound(
+        histogram, bucket, bucket->above);
+    if (bucket->update_generation < info->generation)
+      decay(histogram, bucket, info->generation);
+    info->weights[idx] = bucket->count;
 
     unlock_boundary(bucket, mp_flag);
-    if (bucket->above == NULL)
-      break;
     bucket = bucket->above;
     idx++;
   }
-  *num_buckets = idx + 1;
 
   if (mp_flag & DHIST_MULTI_THREADED)
     pthread_mutex_unlock(histogram->tree_mtx);
+
+  info->num_buckets = idx;
+  info->num_boundaries = info->num_buckets + 1;
+
+  total_count = 0.0;
+  for (idx = 0; idx < info->num_buckets; idx++)
+    total_count += info->weights[idx];
+
+  for (idx = 0; idx < info->num_buckets; idx++) {
+    info->weights[idx] =
+        (info->boundaries[idx + 1] - info->boundaries[idx]) / total_count;
+  }
+}
+
+static void
+clean_info(struct dhist_info *info) {
+  free(info->weights);
+  info->weights = NULL;
+  info->boundaries = NULL;
+  info->num_buckets = 0;
+  info->num_boundaries = 0;
 }
 
 // Call this with n == 0 to get a count of how many characters (not including
@@ -1296,9 +1248,8 @@ extract_info(
 // to construct the string.
 static int
 snprint_histogram(
-    char *s_buffer, size_t n, struct dhist *histogram,
-    const char *title, const char *xlabel, uint64_t generation,
-    double *boundaries, double *weights, int num_buckets) {
+    char *s_buffer, size_t n, struct dhist_info *info, const char *title,
+    const char *xlabel) {
   int idx, num_chars = 0;
 
   num_chars += snprintf(s_buffer + num_chars, n, "{");
@@ -1311,20 +1262,25 @@ snprint_histogram(
         snprintf(s_buffer + num_chars, n, "\"xlabel\": \"%s\", ", xlabel);
   }
 
-  num_chars +=
-      snprintf(s_buffer + num_chars, n, "\"generation\": %lu, ", generation);
-  num_chars += snprintf(s_buffer + num_chars, n, "\"id\": %lu, ",
-      (uint64_t)histogram);
+  num_chars += snprintf(
+      s_buffer + num_chars, n, "\"generation\": %lu, ", info->generation);
+  num_chars += snprintf(
+      s_buffer + num_chars, n, "\"id\": %lu, ", (uint64_t)info->histogram);
 
   num_chars += snprintf(s_buffer + num_chars, n, "\"weights\": [");
-  for (idx = 0; idx < num_buckets - 1; idx++)
-    num_chars += snprintf(s_buffer + num_chars, n, "%lf, ", weights[idx]);
-  num_chars += snprintf(s_buffer + num_chars, n, "%lf], ", weights[idx]);
+  for (idx = 0; idx < info->num_buckets - 1; idx++) {
+    num_chars += snprintf(
+        s_buffer + num_chars, n, "%lf, ", info->weights[idx]);
+  }
+  num_chars += snprintf(s_buffer + num_chars, n, "%lf], ", info->weights[idx]);
 
   num_chars += snprintf(s_buffer + num_chars, n, "\"boundaries\": [");
-  for (idx = 0; idx < num_buckets; idx++)
-    num_chars += snprintf(s_buffer + num_chars, n, "%lf, ", boundaries[idx]);
-  num_chars += snprintf(s_buffer + num_chars, n, "%lf]}", boundaries[idx]);
+  for (idx = 0; idx < info->num_buckets; idx++) {
+    num_chars += snprintf(
+        s_buffer + num_chars, n, "%lf, ", info->boundaries[idx]);
+  }
+  num_chars += snprintf(
+      s_buffer + num_chars, n, "%lf]}", info->boundaries[idx]);
 
   return num_chars;
 }
@@ -1399,65 +1355,85 @@ assert_consistent(struct dhist *histogram) {
   assert_invariant(histogram->root);
 }
 
+/*
+ * Note: This does NOT initialize the weights, although it does reserve
+ * enough space that the weights can be calculated later.
+ */
 static void
 union_of_boundaries(
-    int num_boundaries1, double *boundaries1,
-    int num_boundaries2, double *boundaries2,
-    int *num_boundaries_union, double **union_boundaries) {
+    struct dhist_info *info1, struct dhist_info *info2,
+    struct dhist_info *union_info) {
   int idx1, idx2, union_idx;
-  double memo;
 
-  *union_boundaries = (double *)malloc(
-      (size_t)(num_boundaries1 + num_boundaries2) * sizeof(double));
+  union_info->histogram = NULL;
+  union_info->generation = 0;
+  union_info->weights = (double *)malloc(sizeof(double) * (size_t)(
+      info1->num_buckets + info1->num_boundaries +
+      info2->num_buckets + info2->num_boundaries));
+  union_info->boundaries =
+      union_info->weights + (info1->num_buckets + info2->num_buckets);
 
   idx1 = idx2 = union_idx = 0;
-  while (idx1 < num_boundaries1 || idx2 < num_boundaries2) {
-    if (idx1 < num_boundaries1 && idx2 < num_boundaries2 &&
-        boundaries1[idx1] == boundaries2[idx2]) {
-      (*union_boundaries)[union_idx] = boundaries1[idx1];
+  while (idx1 < info1->num_boundaries || idx2 < info2->num_boundaries) {
+    if (idx1 < info1->num_boundaries && idx2 < info2->num_boundaries &&
+        info1->boundaries[idx1] == info2->boundaries[idx2]) {
+      union_info->boundaries[union_idx] = info2->boundaries[idx1];
       idx1++;
       idx2++;
-    } else if (idx2 == num_boundaries2 ||
-               ((idx1 < num_boundaries1) &&
-                (boundaries1[idx1] < boundaries2[idx2]))) {
-      (*union_boundaries)[union_idx] = boundaries1[idx1];
+    } else if (idx2 == info2->num_boundaries ||
+               ((idx1 < info1->num_boundaries) &&
+                (info1->boundaries[idx1] < info2->boundaries[idx2]))) {
+      union_info->boundaries[union_idx] = info1->boundaries[idx1];
       idx1++;
     } else {
-      (*union_boundaries)[union_idx] = boundaries2[idx2];
+      union_info->boundaries[union_idx] = info2->boundaries[idx2];
       idx2++;
     }
     union_idx++;
   }
-  *num_boundaries_union = union_idx;
+  union_info->num_boundaries = union_idx;
+  union_info->num_buckets = union_idx - 1;
 }
 
 static void
 redistribute(
-    int orig_num_buckets, double *orig_weights, double *orig_boundaries,
-    int final_num_buckets, double *final_weights, double *final_boundaries) {
-  int final_idx, orig_idx, orig_num_boundaries;
+    struct dhist_info *info_orig, struct dhist_info *info_union,
+    struct dhist_info *info_redist) {
+  int orig_idx, redist_idx;
 
-  orig_num_boundaries = orig_num_buckets + 1;
+  info_redist->histogram = NULL;
+  info_redist->weights = (double *)malloc(sizeof(double) *
+      (size_t)(info_union->num_buckets + info_union->num_boundaries));
+  info_redist->boundaries = info_redist->weights + info_union->num_buckets;
+  info_redist->num_buckets = info_union->num_buckets;
+  info_redist->num_boundaries = info_union->num_boundaries;
+
   orig_idx = 0;
-  for (final_idx = 0; final_idx < final_num_buckets; final_idx++) {
-    if (orig_boundaries[orig_idx + 1] == final_boundaries[final_idx]) {
+  for (redist_idx = 0; redist_idx < info_union->num_buckets; redist_idx++) {
+    info_redist->boundaries[redist_idx] = info_union->boundaries[redist_idx];
+    if (info_orig->boundaries[orig_idx + 1] ==
+        info_union->boundaries[redist_idx]) {
       // Shift the orig boundary that we're considering.
       orig_idx++;
     }
 
-    if (orig_idx == orig_num_buckets) {
+    if (orig_idx == info_orig->num_buckets) {
       // We've exhausted the distribution. Fill in the rest and exit.
-      for (; final_idx < final_num_buckets; final_idx++) {
-        final_weights[final_idx] = 0.0;
+      for (; redist_idx < info_union->num_buckets; redist_idx++) {
+        info_redist->boundaries[redist_idx] =
+            info_union->boundaries[redist_idx];
+        info_redist->weights[redist_idx] = 0.0;
       }
-      return;
+      break;
     }
 
-    if (final_boundaries[final_idx] < orig_boundaries[0]) {
-      final_weights[final_idx] = 0.0;
+    if (info_union->boundaries[redist_idx] < info_orig->boundaries[0]) {
+      info_redist->weights[redist_idx] = 0.0;
     } else {
-      final_weights[final_idx] = orig_weights[orig_idx];
+      info_redist->weights[redist_idx] = info_orig->weights[orig_idx];
     }
   }
+  info_redist->boundaries[info_redist->num_boundaries - 1] =
+      info_union->boundaries[info_redist->num_boundaries - 1];
 }
 
