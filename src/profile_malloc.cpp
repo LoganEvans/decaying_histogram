@@ -135,7 +135,7 @@ int main() {
     while (rdtsc() < args.end_timestamp) {
       nanosleep(&tim , &tim2);
       histogram_json = dhist_get_json(
-          g_histogram, true, "Test", "log_2(insertion time)",
+          g_histogram, "Test", "log_2(insertion time)",
           DHIST_MULTI_THREADED);
       puts(histogram_json);
       free(histogram_json);

@@ -109,7 +109,7 @@ int main() {
   while (1) {
     nanosleep(&tim , &tim2);
     histogram_json = dhist_get_json(
-        g_histogram, true, "Test", "log_2(insertion time)", DHIST_MP_FLAG);
+        g_histogram, "Test", "log_2(insertion time)", DHIST_MP_FLAG);
     puts(histogram_json);
     free(histogram_json);
     fflush(stdout);
@@ -120,7 +120,7 @@ int main() {
     pthread_join(threads[i], NULL);
 
   histogram_json = dhist_get_json(
-      g_histogram, true, "Test", "log_2(insertion time)", DHIST_MP_FLAG);
+      g_histogram, "Test", "log_2(insertion time)", DHIST_MP_FLAG);
   puts(histogram_json);
   free(histogram_json);
   dhist_destroy(g_histogram);

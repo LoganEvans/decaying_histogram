@@ -36,7 +36,7 @@
 #define ALPHA_SLOW 0.0001
 #define ALPHA_FAST 0.000417128920021
 
-#define COUNT 1000000
+#define COUNT 10000000
 //#define COUNT 100
 
 #define ANIMATE 0
@@ -71,12 +71,12 @@ int main() {
 #if ANIMATE
       if (idx % 10000 == 0) {
         histogram_json = get_new_histogram_json(
-              dhist_slow, true, "dhist_slow", NULL, DHIST_SINGLE_THREADED);
+              dhist_slow, "dhist_slow", NULL, DHIST_SINGLE_THREADED);
         puts(histogram_json);
         free(histogram_json);
 
         histogram_json = get_new_histogram_json(
-              dhist_fast, true, "dhist_fast", NULL, DHIST_SINGLE_THREADED);
+              dhist_fast, "dhist_fast", NULL, DHIST_SINGLE_THREADED);
         puts(histogram_json);
         free(histogram_json);
       }
@@ -85,11 +85,8 @@ int main() {
 #if !ANIMATE
       if (iterations == 0) {
         printf("%lf\n",
-            dhist_distance(
-              //dhist_earth_movers_distance, dhist_slow, dhist_fast, true,
-              //dhist_Kolmogorov_Smirnov_statistic, dhist_slow, dhist_fast, true,
-              dhist_Jaccard_distance, dhist_slow, dhist_fast, true,
-              DHIST_SINGLE_THREADED));
+            dhist_Kolmogorov_Smirnov_statistic(
+              dhist_slow, dhist_fast, DHIST_SINGLE_THREADED));
       }
 #endif
     }

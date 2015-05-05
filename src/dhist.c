@@ -139,8 +139,7 @@ static int snprint_histogram(
 static void assert_consistent(struct dhist *histogram);
 
 static void extract_info(
-    struct dhist *histogram, bool estimate_ok, int mp_flag,
-    struct dhist_info *info);
+    struct dhist *histogram, int mp_flag, struct dhist_info *info);
 static void union_of_boundaries(
     struct dhist_info *info1, struct dhist_info *info2,
     struct dhist_info *info_union);
@@ -281,13 +280,13 @@ void dhist_insert(
 
 // The caller needs to call free on the result.
 char * dhist_get_json(
-    struct dhist *histogram, bool estimate_ok,
-    const char *title, const char *xlabel, int mp_flag) {
+    struct dhist *histogram, const char *title, const char *xlabel,
+    int mp_flag) {
   int num_chars;
   struct dhist_info info;
   char *buffer;
 
-  extract_info(histogram, estimate_ok, mp_flag, &info);
+  extract_info(histogram, mp_flag, &info);
   num_chars = snprint_histogram(NULL, 0, &info, title, xlabel);
   buffer = (char *)malloc(sizeof(char) * (size_t)(num_chars + 1));
   snprint_histogram(
@@ -305,66 +304,91 @@ void dhist_set_alpha(struct dhist *histogram, double alpha) {
   assert(false);
 }
 
-double dhist_distance(
-    enum dhist_distance_t distance_name,
-    struct dhist *hist1, struct dhist *hist2,
-    bool estimate_ok, int mp_flag) {
+double dhist_Jaccard_distance(
+    struct dhist *hist1, struct dhist *hist2, int mp_flag) {
   int idx;
   struct dhist_info info1, info2, info_union, info1_redist, info2_redist;
-  double distance, burden, step, union_area, intersection_area, width, cdf[2];
+  double distance, union_area, intersection_area, width;
 
-  // Prepare comparison.
-  extract_info(hist1, estimate_ok, mp_flag, &info1);
-  extract_info(hist2, estimate_ok, mp_flag, &info2);
+  extract_info(hist1, mp_flag, &info1);
+  extract_info(hist2, mp_flag, &info2);
   union_of_boundaries(&info1, &info2, &info_union);
   redistribute(&info1, &info_union, &info1_redist);
   redistribute(&info2, &info_union, &info2_redist);
 
-  // Do actual work.
-  switch (distance_name) {
-  case dhist_Jaccard_distance:
-    union_area = intersection_area = 0.0;
-    for (idx = 0; idx < info_union.num_buckets; idx++) {
-      width = info_union.boundaries[idx + 1] - info_union.boundaries[idx];
-      union_area +=
-          width * MAX(info1_redist.weights[idx], info2_redist.weights[idx]);
-      intersection_area +=
-          width * MIN(info1_redist.weights[idx], info2_redist.weights[idx]);
-    }
-    distance = 1.0 - intersection_area / union_area;
-    break;
+  union_area = intersection_area = 0.0;
+  for (idx = 0; idx < info_union.num_buckets; idx++) {
+    width = info_union.boundaries[idx + 1] - info_union.boundaries[idx];
+    union_area +=
+        width * MAX(info1_redist.weights[idx], info2_redist.weights[idx]);
+    intersection_area +=
+        width * MIN(info1_redist.weights[idx], info2_redist.weights[idx]);
+  }
+  distance = 1.0 - intersection_area / union_area;
 
-  case dhist_Kolmogorov_Smirnov_statistic:
-    distance = cdf[0] = cdf[1] = 0.0;
-    for (idx = 0; idx < info_union.num_buckets; idx++) {
-      width = info_union.boundaries[idx + 1] - info_union.boundaries[idx];
-      cdf[0] += width * info1_redist.weights[idx];
-      cdf[1] += width * info2_redist.weights[idx];
-      if (ABS(cdf[1] - cdf[0]) > distance)
-        distance = ABS(cdf[1] - cdf[0]);
-    }
-    break;
+  clean_info(&info1);
+  clean_info(&info2);
+  clean_info(&info_union);
+  clean_info(&info1_redist);
+  clean_info(&info2_redist);
 
-  case dhist_earth_movers_distance:
-    distance = burden = step = 0.0;
-    for (idx = 0; idx < info_union.num_buckets - 1; idx++) {
-      burden += info2_redist.weights[idx] - info1_redist.weights[idx];
-      // step is distance between above bucket's mean and this bucket's mean.
-      step = (
-          (info_union.boundaries[idx + 2] +
-           info_union.boundaries[idx + 1]) / 2.0 -
-          (info_union.boundaries[idx + 1] +
-           info_union.boundaries[idx]) / 2.0);
-      distance += ABS(burden) * step;
-    }
-    break;
+  return distance;
+}
 
-  default:
-    assert(false);
-    break;
+double dhist_Kolmogorov_Smirnov_statistic(
+    struct dhist *hist1, struct dhist *hist2, int mp_flag) {
+  int idx;
+  struct dhist_info info1, info2, info_union, info1_redist, info2_redist;
+  double distance, width, cdf[2];
+
+  extract_info(hist1, mp_flag, &info1);
+  extract_info(hist2, mp_flag, &info2);
+  union_of_boundaries(&info1, &info2, &info_union);
+  redistribute(&info1, &info_union, &info1_redist);
+  redistribute(&info2, &info_union, &info2_redist);
+
+  distance = cdf[0] = cdf[1] = 0.0;
+  for (idx = 0; idx < info_union.num_buckets; idx++) {
+    width = info_union.boundaries[idx + 1] - info_union.boundaries[idx];
+    cdf[0] += width * info1_redist.weights[idx];
+    cdf[1] += width * info2_redist.weights[idx];
+    if (ABS(cdf[1] - cdf[0]) > distance)
+      distance = ABS(cdf[1] - cdf[0]);
   }
 
-  // Cleanup.
+  clean_info(&info1);
+  clean_info(&info2);
+  clean_info(&info_union);
+  clean_info(&info1_redist);
+  clean_info(&info2_redist);
+
+  return distance;
+}
+
+double dhist_earth_movers_distance(
+    struct dhist *hist1, struct dhist *hist2, int mp_flag) {
+  int idx;
+  struct dhist_info info1, info2, info_union, info1_redist, info2_redist;
+  double distance, burden, step;
+
+  extract_info(hist1, mp_flag, &info1);
+  extract_info(hist2, mp_flag, &info2);
+  union_of_boundaries(&info1, &info2, &info_union);
+  redistribute(&info1, &info_union, &info1_redist);
+  redistribute(&info2, &info_union, &info2_redist);
+
+  distance = burden = step = 0.0;
+  for (idx = 0; idx < info_union.num_buckets - 1; idx++) {
+    burden += info2_redist.weights[idx] - info1_redist.weights[idx];
+    // step is distance between above bucket's mean and this bucket's mean.
+    step = (
+        (info_union.boundaries[idx + 2] +
+         info_union.boundaries[idx + 1]) / 2.0 -
+        (info_union.boundaries[idx + 1] +
+         info_union.boundaries[idx]) / 2.0);
+    distance += ABS(burden) * step;
+  }
+
   clean_info(&info1);
   clean_info(&info2);
   clean_info(&info_union);
@@ -1175,8 +1199,7 @@ decay(struct dhist *histogram, struct bucket *bucket, uint64_t generation) {
 }
 
 static void extract_info(
-    struct dhist *histogram, bool estimate_ok, int mp_flag,
-    struct dhist_info *info) {
+    struct dhist *histogram, int mp_flag, struct dhist_info *info) {
   struct bucket *bucket;
   double total_count;
   int idx;
@@ -1229,8 +1252,8 @@ static void extract_info(
     total_count += info->weights[idx];
 
   for (idx = 0; idx < info->num_buckets; idx++) {
-    info->weights[idx] =
-        (info->boundaries[idx + 1] - info->boundaries[idx]) / total_count;
+    info->weights[idx] /=
+        (info->boundaries[idx + 1] - info->boundaries[idx]) * total_count;
   }
 }
 

@@ -40,12 +40,6 @@ extern "C" {
 extern const int DHIST_SINGLE_THREADED;
 extern const int DHIST_MULTI_THREADED;
 
-enum dhist_distance_t {
-  dhist_Jaccard_distance,
-  dhist_Kolmogorov_Smirnov_statistic,
-  dhist_earth_movers_distance
-};
-
 struct dhist {
   double delete_bucket_threshold;
   double split_bucket_threshold;
@@ -68,15 +62,17 @@ struct dhist * dhist_init(int target_buckets, double alpha);
 void dhist_destroy(struct dhist *histogram);
 void dhist_insert(struct dhist *histogram, double observation, int mp_flag);
 char * dhist_get_json(
-    struct dhist *histogram, bool estimate_ok,
-    const char *title, const char *xlabel, int mp_flag);
+    struct dhist *histogram, const char *title, const char *xlabel,
+    int mp_flag);
 void dhist_set_target_buckets(struct dhist *histogram, int target_buckets);
 void dhist_set_alpha(struct dhist *histogram, double alpha);
 
-double dhist_distance(
-    enum dhist_distance_t distance_name,
-    struct dhist *hist1, struct dhist *hist2,
-    bool estimate_ok, int mp_flag);
+double dhist_Jaccard_distance(
+    struct dhist *hist1, struct dhist *hist2, int mp_flag);
+double dhist_Kolmogorov_Smirnov_statistic(
+    struct dhist *hist1, struct dhist *hist2, int mp_flag);
+double dhist_earth_movers_distance(
+    struct dhist *hist1, struct dhist *hist2, int mp_flag);
 
 #ifdef __cplusplus
 }
