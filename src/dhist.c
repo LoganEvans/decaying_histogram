@@ -33,8 +33,8 @@
 #include "dhist.h"
 
 // The same as ceil(x / y). Using this so that math.h is not a dependency.
-#ifndef CEIL
-#define CEIL(x, y) ((int)((x) + ((int)(y) - 1)) / (int)(y))
+#ifndef CEIL_DIVIDE
+#define CEIL_DIVIDE(x, y) ((int)((x) + ((int)(y) - 1)) / (int)(y))
 #endif
 
 #ifndef ABS
@@ -109,8 +109,6 @@ static double compute_bound(
     struct dhist *histogram, struct bucket *left, struct bucket *right);
 static double compute_count(
     struct dhist *histogram, struct bucket *bucket, uint64_t generation);
-static double compute_total_count(
-    struct dhist *histogram, uint64_t generation);
 static bool perform_add(
     struct dhist *histogram, struct bucket *bucket,
     double observation, bool recheck_left_boundary,
@@ -172,7 +170,7 @@ dhist_init(int target_buckets, double alpha) {
   histogram->split_bucket_threshold = expected_count * (1.0 + radius);
   histogram->alpha = alpha;
   histogram->max_num_buckets =
-      (uint32_t)CEIL(max_count, histogram->delete_bucket_threshold);
+      (uint32_t)CEIL_DIVIDE(max_count, histogram->delete_bucket_threshold);
   histogram->bucket_list = (struct bucket *)malloc(
       histogram->max_num_buckets * sizeof(struct bucket));
   for (idx = 0; idx < histogram->max_num_buckets; idx++) {
@@ -294,14 +292,6 @@ char * dhist_get_json(
   clean_info(&info);
 
   return buffer;
-}
-
-void dhist_set_target_buckets(struct dhist *histogram, int target_buckets) {
-  assert(false);
-}
-
-void dhist_set_alpha(struct dhist *histogram, double alpha) {
-  assert(false);
 }
 
 double dhist_Jaccard_distance(
@@ -767,11 +757,6 @@ static double compute_count(
       get_decay(histogram, generation - bucket->update_generation));
 }
 
-static double compute_total_count(struct dhist *histogram, uint64_t generation) {
-  return (1 - get_decay(histogram, generation)) /
-         histogram->alpha;
-}
-
 static bool
 perform_add(
     struct dhist *histogram, struct bucket *bucket, double observation,
@@ -1217,8 +1202,10 @@ static void extract_info(
   info->generation = get_generation(histogram, false, mp_flag);
 
   bucket = histogram->root;
-  while (bucket->below)
-    bucket = bucket->below;
+  // Astonishingly, this is possibly actually slower than traversing
+  // the bucket->below linked list.
+  while (bucket->children[0])
+    bucket = bucket->children[0];
 
   // First, populate weights with the raw counts and identify bucket
   // boundaries. Then compute the total count of all observations.

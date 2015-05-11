@@ -83,11 +83,11 @@ int main() {
 #endif
 
 #if !ANIMATE
-      if (iterations == 0) {
-        printf("%lf\n",
-            dhist_Kolmogorov_Smirnov_statistic(
-              dhist_slow, dhist_fast, DHIST_SINGLE_THREADED));
-      }
+//      if (iterations == 0) {
+//        printf("%lf\n",
+//            dhist_Kolmogorov_Smirnov_statistic(
+//              dhist_slow, dhist_fast, DHIST_SINGLE_THREADED));
+//      }
 #endif
     }
   }

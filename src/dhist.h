@@ -44,9 +44,7 @@ struct dhist {
   double delete_bucket_threshold;
   double split_bucket_threshold;
   double alpha;
-  double total_count;
   uint64_t generation;
-  uint64_t total_count_generation;
   struct bucket *root;
   // The bucket_list is a pool of buckets that are allocated at initialization
   // time. The length will be max_num_buckets.
@@ -64,8 +62,6 @@ void dhist_insert(struct dhist *histogram, double observation, int mp_flag);
 char * dhist_get_json(
     struct dhist *histogram, const char *title, const char *xlabel,
     int mp_flag);
-void dhist_set_target_buckets(struct dhist *histogram, int target_buckets);
-void dhist_set_alpha(struct dhist *histogram, double alpha);
 
 double dhist_Jaccard_distance(
     struct dhist *hist1, struct dhist *hist2, int mp_flag);
