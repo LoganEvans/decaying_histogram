@@ -50,21 +50,19 @@
 #endif
 
 
-struct bucket {
+// Interestingly, splitting bucket_data out from bucket provides a 4% speedup.
+// This is likely due to the data that rarely changes (pointers only change on
+// a split_bucket or a delete_bucket event) from the data the changes
+// frequently. This means that the cache lines that hold the pointers are
+// invalidated far less frequently than the cache lines for high-churn data.
+struct bucket_data {
   // The values for count, mu, update_generation and the below and above
   // pointers are protected by bucket->boundary_mtx and
-  // bucket->above->boundary_mtx. If this thread holds either of those mutexes,
-  // these values cannot be modified by any other thread.
+  // bucket->above->boundary_mtx. If this thread holds either of those
+  // mutexes, these values cannot be modified by any other thread.
   double count;
   double mu;
   uint64_t update_generation;
-  struct bucket *below;
-  struct bucket *above;
-  // The parent and children pointers, height, and is_enabled fields are
-  // protected by tree_mtx.
-  struct bucket *parent;
-  struct bucket *children[2];
-  pthread_mutex_t *boundary_mtx;  /* lower boundary */
   int height;
   // The is_enabled field exists because the bucket lookup is not protected
   // with any atomics, so it is possible for a thread to obtain a reference to
@@ -72,7 +70,17 @@ struct bucket {
   // and then for the first thread to attempt to update the bucket.
   bool is_enabled;
   bool lock_held;
-  char __padding[2];
+};
+
+struct bucket {
+  struct bucket_data *data;
+  // The parent and children pointers, height, and is_enabled fields are
+  // protected by tree_mtx.
+  struct bucket *children[2];
+  struct bucket *parent;
+  struct bucket *below;
+  struct bucket *above;
+  pthread_mutex_t *boundary_mtx;  /* lower boundary */
 };
 
 struct dhist_info {
@@ -173,10 +181,13 @@ dhist_init(int target_buckets, double alpha) {
       (uint32_t)CEIL_DIVIDE(max_count, histogram->delete_bucket_threshold);
   histogram->bucket_list = (struct bucket *)malloc(
       histogram->max_num_buckets * sizeof(struct bucket));
+  histogram->bucket_list_data = (struct bucket_data *)malloc(
+      histogram->max_num_buckets * sizeof(struct bucket_data));
   for (idx = 0; idx < histogram->max_num_buckets; idx++) {
     bucket = &histogram->bucket_list[idx];
-    bucket->is_enabled = false;
-    bucket->lock_held = false;
+    bucket->data = &histogram->bucket_list_data[idx];
+    bucket->data->is_enabled = false;
+    bucket->data->lock_held = false;
     bucket->boundary_mtx =
       (pthread_mutex_t *)malloc(sizeof(pthread_mutex_t));
     pthread_mutex_init(bucket->boundary_mtx, NULL);
@@ -267,11 +278,11 @@ void dhist_insert(
     unlock_boundary(bucket, mp_flag);
   } while (!add_succeeded);
 
-  if (bucket->count < histogram->delete_bucket_threshold &&
+  if (bucket->data->count < histogram->delete_bucket_threshold &&
       histogram->num_buckets > 1) {
     delete_bucket(histogram, bucket, mp_flag);
   }
-  if (bucket->count > histogram->split_bucket_threshold) {
+  if (bucket->data->count > histogram->split_bucket_threshold) {
     split_bucket(histogram, bucket, mp_flag);
   }
 }
@@ -410,28 +421,28 @@ init_bucket(
 
   for (idx = 0; idx < histogram->max_num_buckets; idx++) {
     bucket = &histogram->bucket_list[idx];
-    if (bucket->is_enabled)
+    if (bucket->data->is_enabled)
       continue;
     if (!trylock_boundary_succeeded(bucket, mp_flag))
       continue;
-    if (bucket->is_enabled) {
-      // We raced or had a stale reference to bucket->is_enabled.
+    if (bucket->data->is_enabled) {
+      // We raced or had a stale reference to bucket->data->is_enabled.
       unlock_boundary(bucket, mp_flag);
       continue;
     }
     break;
   }
 
-  bucket->is_enabled = true;
-  bucket->count = 0.0;
-  bucket->mu = 0.0;
-  bucket->update_generation = 0;
+  bucket->data->is_enabled = true;
+  bucket->data->count = 0.0;
+  bucket->data->mu = 0.0;
+  bucket->data->update_generation = 0;
   bucket->below = NULL;
   bucket->above = NULL;
   bucket->parent = NULL;
   bucket->children[0] = NULL;
   bucket->children[1] = NULL;
-  bucket->height = 1;
+  bucket->data->height = 1;
   unlock_boundary(bucket, mp_flag);
 
   return bucket;
@@ -440,7 +451,7 @@ init_bucket(
 /*
  * Returns true if the observation is between the lower bucket mu and the
  * current bucket mu.
- * obs \in [bucket->below->mu, bucket->mu)
+ * obs \in [bucket->below->data->mu, bucket->data->mu)
  */
 static bool
 is_target_boundary(struct bucket *bucket, double observation) {
@@ -448,12 +459,12 @@ is_target_boundary(struct bucket *bucket, double observation) {
   struct bucket *below;
 
   if ((below = bucket->below) != NULL) {
-    left_mu = below->mu;
+    left_mu = below->data->mu;
   } else {
     left_mu = observation - 1.0;
   }
 
-  mu = bucket->mu;
+  mu = bucket->data->mu;
   if (bucket->above == NULL) {
     mu = observation + 1.0;
   } else if (left_mu == mu && observation == mu) {
@@ -476,7 +487,7 @@ compute_balance(struct bucket *bucket) {
     if (bucket->children[dir] == NULL)
       heights[dir] = 0;
     else
-      heights[dir] = bucket->children[dir]->height;
+      heights[dir] = bucket->children[dir]->data->height;
   }
 
   return heights[1] - heights[0];
@@ -522,7 +533,7 @@ static void
 lock_boundary(struct bucket *bucket, int mp_flag) {
   if (mp_flag & DHIST_MULTI_THREADED) {
     pthread_mutex_lock(bucket->boundary_mtx);
-    bucket->lock_held = true;
+    bucket->data->lock_held = true;
   }
 }
 
@@ -531,7 +542,7 @@ trylock_boundary_succeeded(struct bucket *bucket, int mp_flag) {
   if (mp_flag & DHIST_SINGLE_THREADED) {
     return true;
   } else if (pthread_mutex_trylock(bucket->boundary_mtx) == 0) {
-    bucket->lock_held = true;
+    bucket->data->lock_held = true;
     return true;
   } else {
     return false;
@@ -541,7 +552,7 @@ trylock_boundary_succeeded(struct bucket *bucket, int mp_flag) {
 static void
 unlock_boundary(struct bucket *bucket, int mp_flag) {
   if (mp_flag & DHIST_MULTI_THREADED) {
-    bucket->lock_held = false;
+    bucket->data->lock_held = false;
     pthread_mutex_unlock(bucket->boundary_mtx);
   }
 }
@@ -550,7 +561,7 @@ static void
 _print_tree(struct bucket *bucket, int depth) {
   int i;
 
-  printf("%.2lf", bucket->mu);
+  printf("%.2lf", bucket->data->mu);
 
   if (bucket->children[0]) {
     printf("\t  ");
@@ -581,16 +592,16 @@ fix_height(struct bucket *bucket) {
     left = bucket->children[0];
     right = bucket->children[1];
 
-    prior_height = bucket->height;
+    prior_height = bucket->data->height;
     if (left == NULL && right == NULL) {
-      bucket->height = 1;
+      bucket->data->height = 1;
     } else if (left == NULL) {
-      bucket->height = 1 + right->height;
+      bucket->data->height = 1 + right->data->height;
     } else if (right == NULL) {
-      bucket->height = 1 + left->height;
+      bucket->data->height = 1 + left->data->height;
     } else {
-      bucket->height =
-          1 + (left->height > right->height ? left->height : right->height);
+      bucket->data->height =
+          1 + (left->data->height > right->data->height ? left->data->height : right->data->height);
     }
 
     bucket = bucket->parent;
@@ -623,21 +634,21 @@ assert_invariant(struct bucket *root) {
   if (root == NULL) {
     return 0;
   } else if (root->children[0] == NULL && root->children[1] == NULL) {
-    if (root->height != 1) {
+    if (root->data->height != 1) {
       print_tree(root);
-      assert(root->height == 1);
+      assert(root->data->height == 1);
     }
     return 1;
   } else {
-    if (root->children[0] && root->mu < root->children[0]->mu) {
-      printf("ORDER ERROR(0): root->mu: %lf < root->children[0]->mu: %lf ...\n",
-          root->mu, root->children[0]->mu);
+    if (root->children[0] && root->data->mu < root->children[0]->data->mu) {
+      printf("ORDER ERROR(0): root->data->mu: %lf < root->children[0]->data->mu: %lf ...\n",
+          root->data->mu, root->children[0]->data->mu);
       assert(false);
     }
 
-    if (root->children[1] && root->mu > root->children[1]->mu) {
-      printf("ORDER ERROR(1): root->mu: %lf > root->children[1]->mu: %lf ...\n",
-          root->mu, root->children[1]->mu);
+    if (root->children[1] && root->data->mu > root->children[1]->data->mu) {
+      printf("ORDER ERROR(1): root->data->mu: %lf > root->children[1]->data->mu: %lf ...\n",
+          root->data->mu, root->children[1]->data->mu);
       assert(false);
     }
 
@@ -645,9 +656,9 @@ assert_invariant(struct bucket *root) {
     if (root->children[0] == NULL && left != 0) {
       printf("ERROR(1): root->children[0] == NULL && left(%d) != 0\n", left);
       assert(false);
-    } else if (root->children[0] && (root->children[0]->height != left)) {
+    } else if (root->children[0] && (root->children[0]->data->height != left)) {
       printf("ERROR(2): root->children[0]->hieght(%d) != left(%d)\n",
-          root->children[0]->height, left);
+          root->children[0]->data->height, left);
       assert(false);
     }
 
@@ -655,9 +666,9 @@ assert_invariant(struct bucket *root) {
     if (root->children[1] == NULL && right != 0) {
       printf("ERROR(3): root->children[1] == NULL && right(%d) != 0\n", right);
       assert(false);
-    } else if (root->children[1] && (root->children[1]->height != right)) {
+    } else if (root->children[1] && (root->children[1]->data->height != right)) {
       printf("ERROR(4): root->children[1]->hieght(%d) != right(%d)\n",
-          root->children[1]->height, right);
+          root->children[1]->data->height, right);
       assert(false);
     }
 
@@ -672,11 +683,11 @@ assert_invariant(struct bucket *root) {
       }
     }
 
-    if ((root->height != left + 1 && root->height != right + 1) ||
-        (root->height <= left || root->height <= right)) {
+    if ((root->data->height != left + 1 && root->data->height != right + 1) ||
+        (root->data->height <= left || root->data->height <= right)) {
       printf(
         "root height is not correct. heights -- root: %d left: %d right: %d\n",
-        root->height, left, right);
+        root->data->height, left, right);
       assert(false);
     }
 
@@ -728,21 +739,21 @@ compute_bound(
   double count_left, mu_left, count_right, mu_right;
 
   if (!left) {
-    return right->mu - 0.5;
+    return right->data->mu - 0.5;
   } else if (!right) {
-    return left->mu + 0.5;
-  } else if (left->update_generation > right->update_generation) {
-    generation = left->update_generation;
-    count_left = left->count;
-    mu_left = left->mu;
+    return left->data->mu + 0.5;
+  } else if (left->data->update_generation > right->data->update_generation) {
+    generation = left->data->update_generation;
+    count_left = left->data->count;
+    mu_left = left->data->mu;
     count_right = compute_count(histogram, right, generation);
-    mu_right = right->mu;
+    mu_right = right->data->mu;
   } else {
-    generation = right->update_generation;
+    generation = right->data->update_generation;
     count_left = compute_count(histogram, left, generation);
-    mu_left = left->mu;
-    count_right = right->count;
-    mu_right = right->mu;
+    mu_left = left->data->mu;
+    count_right = right->data->count;
+    mu_right = right->data->mu;
   }
 
   return (
@@ -753,8 +764,8 @@ compute_bound(
 static double compute_count(
     struct dhist *histogram, struct bucket *bucket, uint64_t generation) {
   return (
-      bucket->count *
-      get_decay(histogram, generation - bucket->update_generation));
+      bucket->data->count *
+      get_decay(histogram, generation - bucket->data->update_generation));
 }
 
 static bool
@@ -776,11 +787,11 @@ perform_add(
 
   update_generation = get_generation(histogram, true, mp_flag);
 
-  bucket->count = 1.0 + compute_count(
+  bucket->data->count = 1.0 + compute_count(
       histogram, bucket, update_generation);
-  bucket->mu =
-      (bucket->count * bucket->mu + observation) / (bucket->count + 1);
-  bucket->update_generation = update_generation;
+  bucket->data->mu =
+      (bucket->data->count * bucket->data->mu + observation) / (bucket->data->count + 1);
+  bucket->data->update_generation = update_generation;
 
   return true;
 }
@@ -789,7 +800,7 @@ perform_add(
  * This returns the bucket with the greatest mu less than observation (which is
  * not necessarily the bucket where observation will be inserted) unless the
  * target bucket is the leftmost bucket, in which case observation may be less
- * than bucket->mu.
+ * than bucket->data->mu.
  * If mp_flag & DHIST_MULTI_THREADED, the boundary_mtx for this bucket and its
  * right hand neighbor will be locked.
  */
@@ -802,9 +813,9 @@ static struct bucket * find_bucket(
     do {
       // The first two branches are quick decisions that avoid computing
       // the region where the boundary can exist.
-      if ((other = bucket->below) && observation < other->mu) {
+      if ((other = bucket->below) && observation < other->data->mu) {
         bucket = bucket->children[0];
-      } else if ((other = bucket->above) && other->mu <= observation) {
+      } else if ((other = bucket->above) && other->data->mu <= observation) {
         bucket = bucket->children[1];
       } else if (is_target_boundary(bucket, observation)) {
         // It appears that we've found the target boundary, but we haven't
@@ -816,7 +827,7 @@ static struct bucket * find_bucket(
         } else {
           lock_boundary(bucket, mp_flag);
 
-          if (!is_target_boundary(bucket, observation) || !bucket->is_enabled) {
+          if (!is_target_boundary(bucket, observation) || !bucket->data->is_enabled) {
             // We raced, so restart.
             unlock_boundary(bucket, mp_flag);
             bucket = histogram->root;
@@ -825,7 +836,7 @@ static struct bucket * find_bucket(
           }
         }
       } else {
-        bucket = bucket->children[bucket->mu <= observation];
+        bucket = bucket->children[bucket->data->mu <= observation];
       }
     } while (bucket != NULL);
     // We can fail to find a bucket if the bucket boundaries moved around
@@ -843,7 +854,7 @@ fix_balance(
 
   fix_height(bucket);
   while (bucket != NULL) {
-    prior_height = bucket->height;
+    prior_height = bucket->data->height;
     balance = compute_balance(bucket);
     while (ABS(compute_balance(bucket)) >= 2) {
       balance = compute_balance(bucket);
@@ -853,8 +864,8 @@ fix_balance(
         bucket = rotate_double(histogram, bucket, dir);
       } else if (bucket->children[!dir]->children[dir] == NULL) {
         bucket = rotate_single(histogram, bucket, dir);
-      } else if (bucket->children[!dir]->children[dir]->height >
-          bucket->children[!dir]->children[!dir]->height) {
+      } else if (bucket->children[!dir]->children[dir]->data->height >
+          bucket->children[!dir]->children[!dir]->data->height) {
         bucket = rotate_double(histogram, bucket, dir);
       } else {
         bucket = rotate_single(histogram, bucket, dir);
@@ -862,7 +873,7 @@ fix_balance(
     }
     fix_height(bucket);
 
-    if (prior_height == bucket->height)
+    if (prior_height == bucket->data->height)
       bucket = bucket->parent;
     if (upward == false)
       break;
@@ -929,7 +940,7 @@ split_bucket(struct dhist *histogram, struct bucket *bucket, int mp_flag) {
   if (mp_flag & DHIST_MULTI_THREADED)
     pthread_mutex_lock(histogram->tree_mtx);
 
-  if (bucket->is_enabled)
+  if (bucket->data->is_enabled)
     _split_bucket(histogram, bucket, mp_flag);
 
   if (mp_flag & DHIST_MULTI_THREADED)
@@ -950,7 +961,7 @@ _split_bucket(struct dhist *histogram, struct bucket *bucket, int mp_flag) {
 
     while (cursor) {
       memo = cursor->above;
-      if (cursor->count < histogram->delete_bucket_threshold &&
+      if (cursor->data->count < histogram->delete_bucket_threshold &&
           histogram->num_buckets > 1) {
         _delete_bucket(histogram, cursor, mp_flag);
       }
@@ -959,7 +970,7 @@ _split_bucket(struct dhist *histogram, struct bucket *bucket, int mp_flag) {
   }
 
   obtain_write_lock(bucket, mp_flag);
-  if (bucket->count <= histogram->split_bucket_threshold) {
+  if (bucket->data->count <= histogram->split_bucket_threshold) {
     // We raced and lost.
     release_write_lock(bucket, mp_flag);
     return;
@@ -969,9 +980,9 @@ _split_bucket(struct dhist *histogram, struct bucket *bucket, int mp_flag) {
   ++histogram->num_buckets;
   new_bucket->parent = bucket;
 
-  bucket->count /= 2.0;
-  new_bucket->count = bucket->count;
-  new_bucket->update_generation = bucket->update_generation;
+  bucket->data->count /= 2.0;
+  new_bucket->data->count = bucket->data->count;
+  new_bucket->data->update_generation = bucket->data->update_generation;
   new_bucket->below = bucket->below;
   bucket->below = new_bucket;
 
@@ -982,24 +993,24 @@ _split_bucket(struct dhist *histogram, struct bucket *bucket, int mp_flag) {
     // as we observe a non-mu entry, the split between the buckets
     // will be more sensical. However, we will need to take care to not split
     // a bucket again until this happens.
-    new_bucket->mu = bucket->mu;
+    new_bucket->data->mu = bucket->data->mu;
   } else {
     upper_bound = compute_bound(histogram, bucket, bucket->above);
     if (!new_bucket->below) {
-      lower_bound = bucket->mu - (upper_bound - bucket->mu);
+      lower_bound = bucket->data->mu - (upper_bound - bucket->data->mu);
     } else {
       lower_bound = compute_bound(histogram, new_bucket->below, bucket);
     }
     diameter = upper_bound - lower_bound;
     median = lower_bound + diameter / 2.0;
-    new_bucket->mu = median - diameter / 6.0;
-    bucket->mu = median + diameter / 6.0;
+    new_bucket->data->mu = median - diameter / 6.0;
+    bucket->data->mu = median + diameter / 6.0;
     //printf("??? lower_bound: %lf, upper_bound: %lf, "
-    //       "diameter: %lf, median: %lf, new_bucket->mu: %lf, "
-    //       "bucket->mu: %lf\n",
+    //       "diameter: %lf, median: %lf, new_bucket->data->mu: %lf, "
+    //       "bucket->data->mu: %lf\n",
     //       lower_bound, upper_bound,
-    //       diameter, median, new_bucket->mu,
-    //       bucket->mu);
+    //       diameter, median, new_bucket->data->mu,
+    //       bucket->data->mu);
   }
   release_write_lock(bucket, mp_flag);
 
@@ -1023,7 +1034,7 @@ delete_bucket(struct dhist *histogram, struct bucket *bucket, int mp_flag) {
   if (mp_flag & DHIST_MULTI_THREADED)
     pthread_mutex_lock(histogram->tree_mtx);
 
-  if (bucket->is_enabled)
+  if (bucket->data->is_enabled)
     _delete_bucket(histogram, bucket, mp_flag);
 
   if (mp_flag & DHIST_MULTI_THREADED)
@@ -1040,7 +1051,7 @@ _delete_bucket(struct dhist *histogram, struct bucket *bucket, int mp_flag) {
 
  restart:
   obtain_write_lock(bucket, mp_flag);
-  if (bucket->count >= histogram->delete_bucket_threshold ||
+  if (bucket->data->count >= histogram->delete_bucket_threshold ||
       histogram->num_buckets == 1) {
     // We raced and lost.
     release_write_lock(bucket, mp_flag);
@@ -1088,11 +1099,11 @@ _delete_bucket(struct dhist *histogram, struct bucket *bucket, int mp_flag) {
   }
 
   // Update the lucky bucket data.
-  lucky_bucket->mu =
-      (lucky_bucket->mu * lucky_bucket->count +
-       bucket->mu * bucket->count) /
-      (lucky_bucket->count + bucket->count);
-  lucky_bucket->count += bucket->count;
+  lucky_bucket->data->mu =
+      (lucky_bucket->data->mu * lucky_bucket->data->count +
+       bucket->data->mu * bucket->data->count) /
+      (lucky_bucket->data->count + bucket->data->count);
+  lucky_bucket->data->count += bucket->data->count;
 
   // Remove bucket from the linked list.
   if (bucket->below)
@@ -1157,7 +1168,7 @@ _delete_bucket(struct dhist *histogram, struct bucket *bucket, int mp_flag) {
   other = bucket->above;
   bucket->below = bucket->above = NULL;
   bucket->children[0] = bucket->children[1] = NULL;
-  bucket->is_enabled = false;
+  bucket->data->is_enabled = false;
 
   if (mp_flag & DHIST_MULTI_THREADED) {
     unlock_boundary(bucket, mp_flag);
@@ -1175,12 +1186,12 @@ _delete_bucket(struct dhist *histogram, struct bucket *bucket, int mp_flag) {
  */
 static void
 decay(struct dhist *histogram, struct bucket *bucket, uint64_t generation) {
-  if (bucket == NULL || bucket->update_generation == generation)
+  if (bucket == NULL || bucket->data->update_generation == generation)
     return;
 
-  bucket->count *= get_decay(
-      histogram, generation - bucket->update_generation);
-  bucket->update_generation = generation;
+  bucket->data->count *= get_decay(
+      histogram, generation - bucket->data->update_generation);
+  bucket->data->update_generation = generation;
 }
 
 static void extract_info(
@@ -1219,9 +1230,9 @@ static void extract_info(
       lock_boundary(bucket->above, mp_flag);
     info->boundaries[idx + 1] = compute_bound(
         histogram, bucket, bucket->above);
-    if (bucket->update_generation < info->generation)
+    if (bucket->data->update_generation < info->generation)
       decay(histogram, bucket, info->generation);
-    info->weights[idx] = bucket->count;
+    info->weights[idx] = bucket->data->count;
 
     unlock_boundary(bucket, mp_flag);
     bucket = bucket->above;
@@ -1307,9 +1318,9 @@ assert_consistent(struct dhist *histogram) {
     num_buckets_seen++;
     upper_bound = compute_bound(histogram, cursor, cursor->above);
     lower_bound = compute_bound(histogram, cursor->below, cursor);
-    if (cursor->above && cursor->mu > cursor->above->mu) {
-      printf("ERROR: cursor->mu(%lf) > cursor->above->mu(%lf)\n",
-          cursor->mu, cursor->above->mu);
+    if (cursor->above && cursor->data->mu > cursor->above->data->mu) {
+      printf("ERROR: cursor->data->mu(%lf) > cursor->above->data->mu(%lf)\n",
+          cursor->data->mu, cursor->above->data->mu);
       print_tree(histogram->root);
       assert(0);
     }
@@ -1331,24 +1342,24 @@ assert_consistent(struct dhist *histogram) {
     if (cursor->children[0]) {
       assert(cursor->children[0]->parent == cursor);
       assert(cursor->below);
-      assert(cursor->below->mu <= cursor->mu);
+      assert(cursor->below->data->mu <= cursor->data->mu);
     }
 
     if (cursor->children[1]) {
       assert(cursor->children[1]->parent == cursor);
       assert(cursor->above);
-      assert(cursor->mu <= cursor->above->mu);
+      assert(cursor->data->mu <= cursor->above->data->mu);
     }
 
     // Make sure we can find this bucket in the tree.
     cursor_two = histogram->root;
     while (true) {
       if (cursor_two == NULL) {
-        printf("Could not find bucket with mu %lf in the tree.\n", cursor->mu);
+        printf("Could not find bucket with mu %lf in the tree.\n", cursor->data->mu);
         assert(false);
-      } else if (cursor_two->mu == cursor->mu) {
+      } else if (cursor_two->data->mu == cursor->data->mu) {
         break;
-      } else if (cursor->mu < cursor_two->mu) {
+      } else if (cursor->data->mu < cursor_two->data->mu) {
         cursor_two = cursor_two->children[0];
       } else {
         cursor_two = cursor_two->children[1];

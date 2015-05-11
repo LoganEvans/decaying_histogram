@@ -49,6 +49,7 @@ struct dhist {
   // The bucket_list is a pool of buckets that are allocated at initialization
   // time. The length will be max_num_buckets.
   struct bucket *bucket_list;
+  struct bucket_data *bucket_list_data;
   uint32_t num_buckets;
   uint32_t max_num_buckets;
   double *pow_table;
