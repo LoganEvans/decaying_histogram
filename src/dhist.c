@@ -600,8 +600,9 @@ fix_height(struct bucket *bucket) {
     } else if (right == NULL) {
       bucket->data->height = 1 + left->data->height;
     } else {
-      bucket->data->height =
-          1 + (left->data->height > right->data->height ? left->data->height : right->data->height);
+      bucket->data->height = 1 +
+          (left->data->height > right->data->height ?
+           left->data->height : right->data->height);
     }
 
     bucket = bucket->parent;
@@ -641,13 +642,15 @@ assert_invariant(struct bucket *root) {
     return 1;
   } else {
     if (root->children[0] && root->data->mu < root->children[0]->data->mu) {
-      printf("ORDER ERROR(0): root->data->mu: %lf < root->children[0]->data->mu: %lf ...\n",
+      printf("ORDER ERROR(0): root->data->mu: %lf "
+             "< root->children[0]->data->mu: %lf ...\n",
           root->data->mu, root->children[0]->data->mu);
       assert(false);
     }
 
     if (root->children[1] && root->data->mu > root->children[1]->data->mu) {
-      printf("ORDER ERROR(1): root->data->mu: %lf > root->children[1]->data->mu: %lf ...\n",
+      printf("ORDER ERROR(1): root->data->mu: %lf "
+             "> root->children[1]->data->mu: %lf ...\n",
           root->data->mu, root->children[1]->data->mu);
       assert(false);
     }
@@ -656,7 +659,8 @@ assert_invariant(struct bucket *root) {
     if (root->children[0] == NULL && left != 0) {
       printf("ERROR(1): root->children[0] == NULL && left(%d) != 0\n", left);
       assert(false);
-    } else if (root->children[0] && (root->children[0]->data->height != left)) {
+    } else if (root->children[0] &&
+               (root->children[0]->data->height != left)) {
       printf("ERROR(2): root->children[0]->hieght(%d) != left(%d)\n",
           root->children[0]->data->height, left);
       assert(false);
@@ -666,7 +670,8 @@ assert_invariant(struct bucket *root) {
     if (root->children[1] == NULL && right != 0) {
       printf("ERROR(3): root->children[1] == NULL && right(%d) != 0\n", right);
       assert(false);
-    } else if (root->children[1] && (root->children[1]->data->height != right)) {
+    } else if (root->children[1] &&
+               (root->children[1]->data->height != right)) {
       printf("ERROR(4): root->children[1]->hieght(%d) != right(%d)\n",
           root->children[1]->data->height, right);
       assert(false);
@@ -790,7 +795,8 @@ perform_add(
   bucket->data->count = 1.0 + compute_count(
       histogram, bucket, update_generation);
   bucket->data->mu =
-      (bucket->data->count * bucket->data->mu + observation) / (bucket->data->count + 1);
+      (bucket->data->count * bucket->data->mu + observation) /
+      (bucket->data->count + 1);
   bucket->data->update_generation = update_generation;
 
   return true;
@@ -827,7 +833,8 @@ static struct bucket * find_bucket(
         } else {
           lock_boundary(bucket, mp_flag);
 
-          if (!is_target_boundary(bucket, observation) || !bucket->data->is_enabled) {
+          if (!is_target_boundary(bucket, observation) ||
+              !bucket->data->is_enabled) {
             // We raced, so restart.
             unlock_boundary(bucket, mp_flag);
             bucket = histogram->root;
@@ -1355,7 +1362,8 @@ assert_consistent(struct dhist *histogram) {
     cursor_two = histogram->root;
     while (true) {
       if (cursor_two == NULL) {
-        printf("Could not find bucket with mu %lf in the tree.\n", cursor->data->mu);
+        printf("Could not find bucket with mu %lf in the tree.\n",
+            cursor->data->mu);
         assert(false);
       } else if (cursor_two->data->mu == cursor->data->mu) {
         break;

@@ -36,7 +36,7 @@
 #define NUM_BUCKETS 30
 #define NUM_THREADS 1
 #define ALPHA 0.00001
-#define CYCLES (1ULL * 1024 * 1024 * 1024)
+#define CYCLES (5ULL * 2.397 * 1024 * 1024 * 1024)
 #define FRAMES_PER_SECOND 5
 #define PERMITTED_BYTES (1ULL * 1024 * 1024 * 1024)
 #define BYTES_PER_MALLOC (1024ULL * 1024)
@@ -135,7 +135,7 @@ int main() {
     while (rdtsc() < args.end_timestamp) {
       nanosleep(&tim , &tim2);
       histogram_json = dhist_get_json(
-          g_histogram, "Test", "log_2(insertion time)",
+          g_histogram, title, "log_2(insertion time)",
           DHIST_MULTI_THREADED);
       puts(histogram_json);
       free(histogram_json);
