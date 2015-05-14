@@ -71,6 +71,7 @@ struct bucket_data {
   bool is_enabled;
   bool lock_held;
   bool propogate_rebalance;
+  bool __padding;
   struct bucket *fix_balance_stack_next;
 };
 
@@ -916,10 +917,6 @@ fix_balance_process_item(struct dhist *histogram) {
 static void
 fix_balance(
     struct dhist *histogram, struct bucket *bucket) {
-  int balance;
-  int prior_height;
-  int dir;
-
   bucket->data->propogate_rebalance = true;
   fix_balance_enstack(histogram, bucket);
 
