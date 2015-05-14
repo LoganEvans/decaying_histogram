@@ -70,6 +70,8 @@ struct bucket_data {
   // and then for the first thread to attempt to update the bucket.
   bool is_enabled;
   bool lock_held;
+  bool propogate_rebalance;
+  struct bucket *fix_balance_stack_next;
 };
 
 struct bucket {
@@ -123,8 +125,10 @@ static bool perform_add(
     bool recheck_right_boundary, int mp_flag);
 static struct bucket * find_bucket(
     struct dhist *histogram, double observation, int mp_flag);
-static void fix_balance(
-    struct dhist *histogram, struct bucket *bucket, bool upward);
+static void fix_balance_enstack(
+    struct dhist *histogram, struct bucket *bucket);
+static void fix_balance_process_item(struct dhist *histogram);
+static void fix_balance(struct dhist *histogram, struct bucket *bucket);
 static struct bucket * rotate_single(
     struct dhist *histogram, struct bucket *root, int dir);
 static struct bucket * rotate_double(
@@ -183,6 +187,7 @@ dhist_init(int target_buckets, double alpha) {
       histogram->max_num_buckets * sizeof(struct bucket));
   histogram->bucket_list_data = (struct bucket_data *)malloc(
       histogram->max_num_buckets * sizeof(struct bucket_data));
+  histogram->fix_balance_stack = NULL;
   for (idx = 0; idx < histogram->max_num_buckets; idx++) {
     bucket = &histogram->bucket_list[idx];
     bucket->data = &histogram->bucket_list_data[idx];
@@ -191,6 +196,7 @@ dhist_init(int target_buckets, double alpha) {
     bucket->boundary_mtx =
       (pthread_mutex_t *)malloc(sizeof(pthread_mutex_t));
     pthread_mutex_init(bucket->boundary_mtx, NULL);
+    bucket->data->fix_balance_stack_next = NULL;
   }
 
   // We're single threaded in initialization.
@@ -437,12 +443,15 @@ init_bucket(
   bucket->data->count = 0.0;
   bucket->data->mu = 0.0;
   bucket->data->update_generation = 0;
+  bucket->data->height = 1;
+  bucket->data->propogate_rebalance = false;
+  bucket->data->fix_balance_stack_next = NULL;
+
   bucket->below = NULL;
   bucket->above = NULL;
   bucket->parent = NULL;
   bucket->children[0] = NULL;
   bucket->children[1] = NULL;
-  bucket->data->height = 1;
   unlock_boundary(bucket, mp_flag);
 
   return bucket;
@@ -853,37 +862,69 @@ static struct bucket * find_bucket(
 }
 
 static void
+fix_balance_enstack(struct dhist *histogram, struct bucket *bucket) {
+  if (bucket) {
+    bucket->data->fix_balance_stack_next = histogram->fix_balance_stack;
+    histogram->fix_balance_stack = bucket;
+  }
+}
+
+static void
+fix_balance_process_item(struct dhist *histogram) {
+  int balance;
+  int prior_height;
+  int dir;
+  struct bucket *bucket;
+
+  bucket = histogram->fix_balance_stack;
+  if (bucket == NULL)
+    return;
+
+  fix_height(bucket);
+  prior_height = bucket->data->height;
+  balance = compute_balance(bucket);
+  if (ABS(compute_balance(bucket)) >= 2) {
+    balance = compute_balance(bucket);
+    dir = (balance < 0);
+
+    if (bucket->children[!dir]->children[!dir] == NULL) {
+      bucket = rotate_double(histogram, bucket, dir);
+    } else if (bucket->children[!dir]->children[dir] == NULL) {
+      bucket = rotate_single(histogram, bucket, dir);
+    } else if (bucket->children[!dir]->children[dir]->data->height >
+        bucket->children[!dir]->children[!dir]->data->height) {
+      bucket = rotate_double(histogram, bucket, dir);
+    } else {
+      bucket = rotate_single(histogram, bucket, dir);
+    }
+  }
+  fix_height(bucket);
+
+  histogram->fix_balance_stack = bucket->data->fix_balance_stack_next;
+  bucket->data->fix_balance_stack_next = NULL;
+
+  if (bucket->data->propogate_rebalance &&
+      prior_height == bucket->data->height) {
+    bucket->data->propogate_rebalance = false;
+    bucket = bucket->parent;
+    if (bucket)
+      bucket->data->propogate_rebalance = true;
+    fix_balance_enstack(histogram, bucket);
+  }
+}
+
+static void
 fix_balance(
-    struct dhist *histogram, struct bucket *bucket, bool upward) {
+    struct dhist *histogram, struct bucket *bucket) {
   int balance;
   int prior_height;
   int dir;
 
-  fix_height(bucket);
-  while (bucket != NULL) {
-    prior_height = bucket->data->height;
-    balance = compute_balance(bucket);
-    while (ABS(compute_balance(bucket)) >= 2) {
-      balance = compute_balance(bucket);
-      dir = (balance < 0);
+  bucket->data->propogate_rebalance = true;
+  fix_balance_enstack(histogram, bucket);
 
-      if (bucket->children[!dir]->children[!dir] == NULL) {
-        bucket = rotate_double(histogram, bucket, dir);
-      } else if (bucket->children[!dir]->children[dir] == NULL) {
-        bucket = rotate_single(histogram, bucket, dir);
-      } else if (bucket->children[!dir]->children[dir]->data->height >
-          bucket->children[!dir]->children[!dir]->data->height) {
-        bucket = rotate_double(histogram, bucket, dir);
-      } else {
-        bucket = rotate_single(histogram, bucket, dir);
-      }
-    }
-    fix_height(bucket);
-
-    if (prior_height == bucket->data->height)
-      bucket = bucket->parent;
-    if (upward == false)
-      break;
+  while (histogram->fix_balance_stack) {
+    fix_balance_process_item(histogram);
   }
 }
 
@@ -905,9 +946,9 @@ rotate_single(struct dhist *histogram, struct bucket *root, int dir) {
     histogram->root = new_root;
   }
 
-  fix_balance(histogram, new_root->children[0], false);
-  fix_balance(histogram, new_root->children[1], false);
-  fix_balance(histogram, new_root, false);
+  fix_balance_enstack(histogram, new_root);
+  fix_balance_enstack(histogram, new_root->children[0]);
+  fix_balance_enstack(histogram, new_root->children[1]);
 
   return new_root;
 }
@@ -935,9 +976,9 @@ rotate_double(struct dhist *histogram, struct bucket *root, int dir) {
     histogram->root = new_root;
   }
 
-  fix_balance(histogram, new_root->children[0], false);
-  fix_balance(histogram, new_root->children[1], false);
-  fix_balance(histogram, new_root, false);
+  fix_balance_enstack(histogram, new_root);
+  fix_balance_enstack(histogram, new_root->children[0]);
+  fix_balance_enstack(histogram, new_root->children[1]);
 
   return new_root;
 }
@@ -1033,7 +1074,7 @@ _split_bucket(struct dhist *histogram, struct bucket *bucket, int mp_flag) {
   set_child(new_bucket, bucket->children[0], 0);
   set_child(bucket, new_bucket, 0);
 
-  fix_balance(histogram, new_bucket, true);
+  fix_balance(histogram, new_bucket);
 }
 
 static void
@@ -1169,7 +1210,7 @@ _delete_bucket(struct dhist *histogram, struct bucket *bucket, int mp_flag) {
   }
 
   if (attach)
-    fix_balance(histogram, attach, true);
+    fix_balance(histogram, attach);
 
   // Return bucket to the pool.
   other = bucket->above;

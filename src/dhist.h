@@ -55,6 +55,7 @@ struct dhist {
   double *pow_table;
   pthread_mutex_t *tree_mtx;
   pthread_mutex_t *generation_mtx;
+  struct bucket *fix_balance_stack;
 };
 
 struct dhist * dhist_init(int target_buckets, double alpha);
