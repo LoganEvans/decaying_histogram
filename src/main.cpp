@@ -37,13 +37,13 @@
 #define ALPHA 0.000001
 
 // 2.397 * 1024 * 1024 * 1024 is roughly the number of cycles in a second.
-#define CYCLES ((uint64_t)(10 * 2.397 * 1024 * 1024 * 1024))
+#define CYCLES ((uint64_t)(1 * 2.397 * 1024 * 1024 * 1024))
 #define DHIST_MP_FLAG \
     (NUM_THREADS > 1 ? DHIST_MULTI_THREADED : DHIST_SINGLE_THREADED)
 #define FRAMES_PER_SECOND 5
 
-#define ANIMATE 0
-#define NORMAL_DISTRIBUTION 0
+#define ANIMATE 1
+#define NORMAL_DISTRIBUTION 1
 
 static struct dhist *g_histogram;
 
@@ -92,8 +92,10 @@ int main() {
   pthread_t threads[NUM_THREADS];
   struct thread_func_args args;
   struct timespec tim, tim2;
-  char *histogram_json;
+  char *histogram_json = NULL;
+  int json_len, needed_len;
 
+  json_len = 0;
   tim.tv_sec = 0;
   tim.tv_nsec = 1000000000 / FRAMES_PER_SECOND;
 
@@ -108,12 +110,22 @@ int main() {
 #if ANIMATE
   while (1) {
     nanosleep(&tim , &tim2);
-    histogram_json = dhist_get_json(
-        g_histogram, "Test", "log_2(insertion time)", DHIST_MP_FLAG);
+    while (1) {
+      needed_len = dhist_snprint_histogram(histogram_json, json_len,
+          g_histogram, "Test", "log_2(insertion time)", DHIST_MP_FLAG);
+      if (needed_len >= json_len) {
+        json_len = needed_len * 2 + 1;
+        histogram_json = (char *)realloc(histogram_json, json_len);
+      } else {
+        break;
+      }
+    }
+
     puts(histogram_json);
-    free(histogram_json);
     fflush(stdout);
   }
+
+  free(histogram_json);
 #endif
 
   for (int i = 0; i < NUM_THREADS; i++)

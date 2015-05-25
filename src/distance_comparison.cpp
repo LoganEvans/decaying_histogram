@@ -60,6 +60,13 @@ int main() {
   int iterations = 2;
 
   while (iterations--) {
+
+#if !ANIMATE
+    if (iterations == 1) {
+      printf("Jaccard,KS,CVM,EMD,experimental\n");
+    }
+#endif
+
     for (idx = 0; idx < COUNT; idx++) {
       if (idx % (COUNT / 100) == 0)
         fprintf(stderr, "%d / %d              \r", idx, COUNT);
@@ -83,11 +90,19 @@ int main() {
 #endif
 
 #if !ANIMATE
-//      if (iterations == 0) {
-//        printf("%lf\n",
-//            dhist_Kolmogorov_Smirnov_statistic(
-//              dhist_slow, dhist_fast, DHIST_SINGLE_THREADED));
-//      }
+      if (iterations == 0) {
+        printf("%lf,%lf,%lf,%lf,%lf\n",
+            dhist_Jaccard_distance(
+              dhist_slow, dhist_fast, DHIST_SINGLE_THREADED),
+            dhist_Kolmogorov_Smirnov_statistic(
+              dhist_slow, dhist_fast, DHIST_SINGLE_THREADED),
+            dhist_Cramer_von_Mises_criterion(
+              dhist_slow, dhist_fast, DHIST_SINGLE_THREADED),
+            dhist_earth_movers_distance(
+              dhist_slow, dhist_fast, DHIST_SINGLE_THREADED),
+            dhist_experimental_distance(
+              dhist_slow, dhist_fast, DHIST_SINGLE_THREADED));
+      }
 #endif
     }
   }

@@ -64,12 +64,19 @@ void dhist_insert(struct dhist *histogram, double observation, int mp_flag);
 char * dhist_get_json(
     struct dhist *histogram, const char *title, const char *xlabel,
     int mp_flag);
+int dhist_snprint_histogram(
+    char *s_buffer, size_t n, struct dhist *histogram, const char *title,
+    const char *xlabel, int mp_flag);
 
 double dhist_Jaccard_distance(
     struct dhist *hist1, struct dhist *hist2, int mp_flag);
 double dhist_Kolmogorov_Smirnov_statistic(
     struct dhist *hist1, struct dhist *hist2, int mp_flag);
 double dhist_earth_movers_distance(
+    struct dhist *hist1, struct dhist *hist2, int mp_flag);
+double dhist_Cramer_von_Mises_criterion(
+    struct dhist *hist1, struct dhist *hist2, int mp_flag);
+double dhist_experimental_distance(
     struct dhist *hist1, struct dhist *hist2, int mp_flag);
 
 #ifdef __cplusplus

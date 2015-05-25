@@ -88,7 +88,10 @@ struct bucket {
 
 struct dhist_info {
   struct dhist *histogram;
-  double *weights;
+  union {
+    double *weights;
+    double *CDF;
+  };
   double *boundaries;
   uint64_t generation;
   int num_buckets;
@@ -157,6 +160,11 @@ static void union_of_boundaries(
 static void redistribute(
     struct dhist_info *info_orig, struct dhist_info *info_union,
     struct dhist_info *info_redist);
+static void redistribute_CDF(
+    struct dhist_info *info_in, struct dhist_info *CDF_out);
+static void redistribute_CDF_no_intersections(
+    struct dhist_info *CDF1_in, struct dhist_info *CDF2_in,
+    struct dhist_info *CDF1_out, struct dhist_info *CDF2_out);
 static void clean_info(struct dhist_info *info);
 
 
@@ -308,8 +316,19 @@ char * dhist_get_json(
   snprint_histogram(
       buffer, (size_t)(num_chars + 1), &info, title, xlabel);
   clean_info(&info);
-
   return buffer;
+}
+
+int
+dhist_snprint_histogram(
+    char *s_buffer, size_t n, struct dhist *histogram, const char *title,
+    const char *xlabel, int mp_flag) {
+  struct dhist_info info;
+
+  extract_info(histogram, mp_flag, &info);
+  n = snprint_histogram(s_buffer, n, &info, title, xlabel);
+  clean_info(&info);
+  return n;
 }
 
 double dhist_Jaccard_distance(
@@ -347,7 +366,7 @@ double dhist_Kolmogorov_Smirnov_statistic(
     struct dhist *hist1, struct dhist *hist2, int mp_flag) {
   int idx;
   struct dhist_info info1, info2, info_union, info1_redist, info2_redist;
-  double distance, width, cdf[2];
+  double distance, width, CDF[2];
 
   extract_info(hist1, mp_flag, &info1);
   extract_info(hist2, mp_flag, &info2);
@@ -355,13 +374,13 @@ double dhist_Kolmogorov_Smirnov_statistic(
   redistribute(&info1, &info_union, &info1_redist);
   redistribute(&info2, &info_union, &info2_redist);
 
-  distance = cdf[0] = cdf[1] = 0.0;
+  distance = CDF[0] = CDF[1] = 0.0;
   for (idx = 0; idx < info_union.num_buckets; idx++) {
     width = info_union.boundaries[idx + 1] - info_union.boundaries[idx];
-    cdf[0] += width * info1_redist.weights[idx];
-    cdf[1] += width * info2_redist.weights[idx];
-    if (ABS(cdf[1] - cdf[0]) > distance)
-      distance = ABS(cdf[1] - cdf[0]);
+    CDF[0] += width * info1_redist.weights[idx];
+    CDF[1] += width * info2_redist.weights[idx];
+    if (ABS(CDF[1] - CDF[0]) > distance)
+      distance = ABS(CDF[1] - CDF[0]);
   }
 
   clean_info(&info1);
@@ -404,6 +423,125 @@ double dhist_earth_movers_distance(
   clean_info(&info2_redist);
 
   return distance;
+}
+
+double dhist_Cramer_von_Mises_criterion(
+    struct dhist *hist1, struct dhist *hist2, int mp_flag) {
+  int idx;
+  struct dhist_info info1, info2, info_union, info1_redist, info2_redist;
+  double CVM, l, u, y_l, y_u, b, m, width, CDF[2];
+
+  extract_info(hist1, mp_flag, &info1);
+  extract_info(hist2, mp_flag, &info2);
+  union_of_boundaries(&info1, &info2, &info_union);
+  redistribute(&info1, &info_union, &info1_redist);
+  redistribute(&info2, &info_union, &info2_redist);
+
+  // Equation:
+  // CVM = \int_{-\infty}^{\infty} (F(x) - G(x))^2 dF(x)
+  // To handle the the dF(x) (which integrates along the y-axis), instead
+  // we can stretch/contract the x-axis so that F(x) is the line y = x for the
+  // interval [0, 1]. Then, we can integrate the expression along the x-axis.
+  // Since F(x) and G(x) are linear along each bucket segment, the integral
+  // reduces to (using the transformed x-axis):
+  // CVM = \int_0^1 (x - (mx + b))^2 dx
+  // This will need to be done separately for each bucket segment. However,
+  // on the interval [l, u] is:
+  // CVM_ab = ((b + (m - 1)u)^3 - (b + l(m - 1))^3) / (3(m - 1))
+
+  CVM = 0.0;
+  CDF[0] = CDF[1] = 0.0;
+  for (idx = 0; idx < info_union.num_buckets; idx++) {
+    width = info_union.boundaries[idx + 1] - info_union.boundaries[idx];
+    b = CDF[1];  // b = y - mx, CDF[1] is the y, l is the x
+    l = CDF[0];
+    CDF[0] += width * info1_redist.weights[idx];
+    y_l = CDF[1];
+    CDF[1] += width * info2_redist.weights[idx];
+    u = CDF[0];
+    if (u == l)
+      continue;
+    y_u = CDF[1];
+    m = (y_u - y_l) / (u - l);
+    b = b - m * l;
+    CVM += (ipow(b + u*(m - 1), 3) - ipow(b + l*(m - 1), 3)) / (3 * (m - 1));
+    if (CDF[0] >= 1.0)
+      break;
+  }
+
+  clean_info(&info1);
+  clean_info(&info2);
+  clean_info(&info_union);
+  clean_info(&info1_redist);
+  clean_info(&info2_redist);
+
+  return CVM;
+}
+
+// This is related to the earth mover's distance, except that the distance
+// associated with each pebble has a maximum of 1. When moving a pebble X from
+// spot x to spot x', the cost is abs(F(x') - F(x)) + abs(G(x') - G(x)).
+// This can be calculated by stretching/contracting the x-axis so that first
+// F(x), and then G(x), is the line y = x. The distance metric is the area
+// between the two curves on both of these representations.
+// However, it turns out that while these two representations will provide
+// equal area, so we only need to find the area for one transformed
+// distribution.
+double dhist_experimental_distance(
+    struct dhist *hist1, struct dhist *hist2, int mp_flag) {
+  // FG is 0 or 1 and represents the distribution (0 for info1, 1 for info2).
+  int idx, FG;
+  struct dhist_info info1, info2, info_union, info1_redist, info2_redist;
+  struct dhist_info CDF_with_intersections[2], CDF[2];
+  // l := lower bound,
+  // u := upper bound
+  // m := slope of the opposite transformation,
+  // b := y intercept of the opposite transformation,
+  // e
+  // r
+  // j
+  // acc := accumulator,
+  // c
+  // k
+  double acc, l, u, b, m;
+
+  extract_info(hist1, mp_flag, &info1);
+  extract_info(hist2, mp_flag, &info2);
+  union_of_boundaries(&info1, &info2, &info_union);
+  redistribute(&info1, &info_union, &info1_redist);
+  redistribute(&info2, &info_union, &info2_redist);
+  redistribute_CDF(&info1_redist, &CDF_with_intersections[0]);
+  redistribute_CDF(&info2_redist, &CDF_with_intersections[1]);
+  redistribute_CDF_no_intersections(
+      &CDF_with_intersections[0], &CDF_with_intersections[1],
+      &CDF[0], &CDF[1]);
+
+  acc = 0.0;
+  for (idx = 0; idx < CDF[0].num_buckets - 1; idx++) {
+    if (CDF[0].CDF[idx] == CDF[0].CDF[idx + 1])
+      continue;
+    l = CDF[0].CDF[idx];
+    u = CDF[0].CDF[idx + 1];
+    m = (CDF[1].CDF[idx + 1] - CDF[1].CDF[idx]) /
+        (CDF[0].CDF[idx + 1] - CDF[0].CDF[idx]);
+    b = CDF[1].CDF[idx] - m * l;
+    // This is the area for each region (where the F distribution has been
+    // "straightened" out. The ABS is because this is an integral and we don't
+    // bother to figure out which of the two lines is above the other.
+    acc += ABS((l - u) * (2 * b + (m - 1) * (l + u)) / 2);
+  }
+
+  clean_info(&info1);
+  clean_info(&info2);
+  clean_info(&info_union);
+  clean_info(&info1_redist);
+  clean_info(&info2_redist);
+  clean_info(&CDF_with_intersections[0]);
+  clean_info(&CDF_with_intersections[1]);
+  clean_info(&CDF[0]);
+  clean_info(&CDF[1]);
+
+  return 2 * acc;
 }
 
 static double
@@ -1316,37 +1454,67 @@ static int
 snprint_histogram(
     char *s_buffer, size_t n, struct dhist_info *info, const char *title,
     const char *xlabel) {
-  int idx, num_chars = 0;
+  int idx, num_chars, num_for_call;
+  size_t remaining_chars;
 
-  num_chars += snprintf(s_buffer + num_chars, n, "{");
+#define dhist_snprint_helper() do {       \
+    num_chars += num_for_call;            \
+    if (num_for_call > remaining_chars) { \
+      remaining_chars = 0;                \
+      s_buffer = NULL;                    \
+    } else {                              \
+      s_buffer = s_buffer + num_for_call; \
+      remaining_chars -= num_for_call;    \
+    }                                     \
+  } while (0)
+
+  num_chars = 0;
+  remaining_chars = n;
+
+  num_for_call = snprintf(s_buffer, remaining_chars, "{");
+  dhist_snprint_helper();
+
   if (title) {
-    num_chars +=
-        snprintf(s_buffer + num_chars, n, "\"title\": \"%s\", ", title);
+    num_for_call =
+        snprintf(s_buffer, remaining_chars, "\"title\": \"%s\", ", title);
+    dhist_snprint_helper();
   }
   if (xlabel) {
-    num_chars +=
-        snprintf(s_buffer + num_chars, n, "\"xlabel\": \"%s\", ", xlabel);
+    num_for_call =
+        snprintf(s_buffer, remaining_chars, "\"xlabel\": \"%s\", ", xlabel);
+    dhist_snprint_helper();
   }
 
-  num_chars += snprintf(
-      s_buffer + num_chars, n, "\"generation\": %lu, ", info->generation);
-  num_chars += snprintf(
-      s_buffer + num_chars, n, "\"id\": %lu, ", (uint64_t)info->histogram);
+  num_for_call = snprintf(
+      s_buffer, remaining_chars, "\"generation\": %lu, ", info->generation);
+  dhist_snprint_helper();
+  num_for_call = snprintf(
+      s_buffer, remaining_chars, "\"id\": %lu, ", (uint64_t)info->histogram);
+  dhist_snprint_helper();
 
-  num_chars += snprintf(s_buffer + num_chars, n, "\"weights\": [");
+  num_for_call = snprintf(s_buffer, remaining_chars, "\"weights\": [");
+  dhist_snprint_helper();
   for (idx = 0; idx < info->num_buckets - 1; idx++) {
-    num_chars += snprintf(
-        s_buffer + num_chars, n, "%lf, ", info->weights[idx]);
+    num_for_call = snprintf(
+        s_buffer, remaining_chars, "%lf, ", info->weights[idx]);
+    dhist_snprint_helper();
   }
-  num_chars += snprintf(s_buffer + num_chars, n, "%lf], ", info->weights[idx]);
+  num_for_call = snprintf(
+      s_buffer, remaining_chars, "%lf], ", info->weights[idx]);
+  dhist_snprint_helper();
 
-  num_chars += snprintf(s_buffer + num_chars, n, "\"boundaries\": [");
+  num_for_call = snprintf(s_buffer, remaining_chars, "\"boundaries\": [");
+  dhist_snprint_helper();
   for (idx = 0; idx < info->num_buckets; idx++) {
-    num_chars += snprintf(
-        s_buffer + num_chars, n, "%lf, ", info->boundaries[idx]);
+    num_for_call = snprintf(
+        s_buffer, remaining_chars, "%lf, ", info->boundaries[idx]);
+    dhist_snprint_helper();
   }
-  num_chars += snprintf(
-      s_buffer + num_chars, n, "%lf]}", info->boundaries[idx]);
+  num_for_call = snprintf(
+      s_buffer, remaining_chars, "%lf]}", info->boundaries[idx]);
+  dhist_snprint_helper();
+
+#undef dhist_snprint_helper
 
   return num_chars;
 }
@@ -1502,5 +1670,104 @@ redistribute(
   }
   info_redist->boundaries[info_redist->num_boundaries - 1] =
       info_union->boundaries[info_redist->num_boundaries - 1];
+}
+
+static void
+redistribute_CDF(
+    struct dhist_info *info_in, struct dhist_info *CDF_out) {
+  // N == 0 means info1, N == 1 means info2
+  int idx;
+  double width, CDF;
+
+  CDF_out->histogram = NULL;
+  CDF_out->weights = (double *)malloc(sizeof(double) *
+      (size_t)(info_in->num_buckets + info_in->num_boundaries));
+  CDF_out->boundaries = CDF_out->weights + info_in->num_buckets;
+  CDF_out->num_buckets = info_in->num_buckets;
+  CDF_out->num_boundaries = info_in->num_boundaries;
+
+  CDF_out->boundaries[0] = info_in->boundaries[0];
+  CDF = 0.0;
+  for (idx = 0; idx < info_in->num_buckets; idx++) {
+    CDF_out->boundaries[idx + 1] = info_in->boundaries[idx + 1];
+    width = info_in->boundaries[idx + 1] - info_in->boundaries[idx];
+    CDF += width * info_in->weights[idx];
+    CDF_out->CDF[idx] = CDF;
+  }
+}
+
+static void redistribute_CDF_no_intersections(
+    struct dhist_info *CDF1_in, struct dhist_info *CDF2_in,
+    struct dhist_info *CDF1_out, struct dhist_info *CDF2_out) {
+  int idx, out_idx, FG;
+  double len_a, len_b, prop, xval_intersection;
+  struct dhist_info *CDF_in[2], *CDF_out[2];
+
+  CDF_in[0] = CDF1_in;
+  CDF_in[1] = CDF2_in;
+  CDF_out[0] = CDF1_out;
+  CDF_out[1] = CDF2_out;
+
+  for (FG = 0; FG <=1; FG++) {
+    CDF_out[FG]->histogram = NULL;
+    CDF_out[FG]->weights = (double *)malloc(sizeof(double) * 2 *
+        (size_t)(CDF_in[FG]->num_buckets + CDF_in[FG]->num_boundaries));
+    CDF_out[FG]->boundaries = CDF_out[FG]->weights + CDF_in[FG]->num_buckets;
+    CDF_out[FG]->num_buckets = 0;
+    CDF_out[FG]->num_boundaries = 0;
+    CDF_out[FG]->boundaries[0] = CDF_in[FG]->boundaries[0];
+  }
+
+  out_idx = 0;
+  for (idx = 0; idx < CDF_in[0]->num_buckets - 1; idx++) {
+    if ((CDF_in[0]->CDF[idx] < CDF_in[1]->CDF[idx] &&
+         CDF_in[0]->CDF[idx + 1] > CDF_in[1]->CDF[idx + 1]) ||
+        (CDF_in[0]->CDF[idx] > CDF_in[1]->CDF[idx] &&
+         CDF_in[0]->CDF[idx + 1] < CDF_in[1]->CDF[idx + 1])) {
+      // The lines cross. This creates two similar triangles. The proportion of
+      // the bucket that is on the left side of the intersection is equal to
+      // A / (A + B) for corresponding line lengths A and B. The vertical
+      // segments are the easiest to measure.
+      len_a = ABS(CDF_in[1]->CDF[idx] - CDF_in[0]->CDF[idx]);
+      len_b = ABS(CDF_in[1]->CDF[idx + 1] - CDF_in[0]->CDF[idx + 1]);
+      prop = len_a / (len_a + len_b);
+      xval_intersection =
+          CDF_in[0]->boundaries[idx] +
+          prop * (CDF_in[0]->boundaries[idx + 1] - CDF_in[0]->boundaries[idx]);
+      for (FG = 0; FG <= 1; FG++) {
+        CDF_out[FG]->boundaries[out_idx + 1] = xval_intersection;
+        CDF_out[FG]->boundaries[out_idx + 2] = CDF_in[FG]->boundaries[idx + 1];
+        CDF_out[FG]->CDF[out_idx] =
+            CDF_in[FG]->CDF[idx] +
+            prop * (CDF_in[FG]->CDF[idx + 1] - CDF_in[FG]->CDF[idx]);
+        CDF_out[FG]->CDF[out_idx + 1] = CDF_in[FG]->CDF[idx + 1];
+      }
+      out_idx += 2;
+    } else {
+      for (FG = 0; FG <= 1; FG++) {
+        CDF_out[FG]->CDF[out_idx] = CDF_in[FG]->CDF[idx];
+        CDF_out[FG]->boundaries[out_idx + 1] = CDF_in[FG]->boundaries[idx + 1];
+      }
+      out_idx++;
+    }
+  }
+
+  for (FG = 0; FG <= 1; FG++) {
+    CDF_out[FG]->num_buckets = out_idx + 1;
+    CDF_out[FG]->num_boundaries = out_idx + 2;
+    CDF_out[FG]->CDF[out_idx] = CDF_in[FG]->CDF[idx];
+    CDF_out[FG]->boundaries[out_idx] = CDF_in[FG]->CDF[idx + 1];
+  }
+
+  for (FG = 0; FG <= 1; FG++) {
+    for (idx = 0; idx < CDF_out[FG]->num_buckets - 1; idx++) {
+      if (CDF_out[FG]->CDF[idx] > CDF_out[FG]->CDF[idx + 1]) {
+        for (idx = 0; idx < CDF_out[FG]->num_buckets - 1; idx++) {
+          printf("CDF[%d] = %lf\n", idx, CDF_out[FG]->CDF[idx]);
+        }
+        assert(false);
+      }
+    }
+  }
 }
 
