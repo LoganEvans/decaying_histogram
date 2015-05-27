@@ -30,7 +30,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "dhist.h"
+#include "src/dhist.h"
 
 // The same as ceil(x / y). Using this so that math.h is not a dependency.
 #ifndef CEIL_DIVIDE
@@ -106,7 +106,7 @@ static int compute_balance(struct bucket *bucket);
 static void obtain_write_lock(struct bucket *bucket, int mp_flag);
 static void release_write_lock(struct bucket *bucket, int mp_flag);
 static void lock_boundary(struct bucket *bucket, int mp_flag);
-static bool trylock_boundary_succeeded(struct bucket *bucket, int mp_flag);
+static bool trylock_boundary(struct bucket *bucket, int mp_flag);
 static void unlock_boundary(struct bucket *bucket, int mp_flag);
 static void _print_tree(struct bucket *bucket, int depth);
 static void print_tree(struct bucket *bucket);
@@ -115,9 +115,8 @@ static void set_child(struct bucket *root, struct bucket *child, int dir);
 static int count_buckets_in_tree(struct bucket *root);
 static int assert_invariant(struct bucket *root);
 
-static double get_decay(
-    struct dhist *histogram, uint64_t missed_generations);
-static uint64_t get_generation(
+static double get_decay(struct dhist *histogram, uint64_t missed_generations);
+static uint64_t get_next_generation(
     struct dhist *histogram, bool increment, int mp_flag);
 static double compute_bound(
     struct dhist *histogram, struct bucket *left, struct bucket *right);
@@ -127,7 +126,7 @@ static bool perform_add(
     struct dhist *histogram, struct bucket *bucket,
     double observation, bool recheck_left_boundary,
     bool recheck_right_boundary, int mp_flag);
-static struct bucket * find_bucket(
+static struct bucket * find_and_lock_bucket(
     struct dhist *histogram, double observation, int mp_flag);
 static void fix_balance_enstack(
     struct dhist *histogram, struct bucket *bucket);
@@ -160,20 +159,20 @@ static void union_of_boundaries(
 static void redistribute(
     struct dhist_info *info_orig, struct dhist_info *info_union,
     struct dhist_info *info_redist);
-static void redistribute_CDF(
+static void compute_CDF(
     struct dhist_info *info_in, struct dhist_info *CDF_out);
-static void redistribute_CDF_no_intersections(
+static void compute_CDF_no_intersections(
     struct dhist_info *CDF1_in, struct dhist_info *CDF2_in,
     struct dhist_info *CDF1_out, struct dhist_info *CDF2_out);
 static void clean_info(struct dhist_info *info);
 
 
-const int DHIST_SINGLE_THREADED = (1 << 0);
-const int DHIST_MULTI_THREADED = (1 << 1);
+const int DHIST_SINGLE_THREADED = 1 << 0;
+const int DHIST_MULTI_THREADED = 1 << 1;
 
 
 struct dhist *
-dhist_init(int target_buckets, double alpha) {
+dhist_init(int target_buckets, double decay_rate) {
   struct dhist *histogram;
   double max_count, expected_count;
   uint64_t idx;
@@ -182,14 +181,17 @@ dhist_init(int target_buckets, double alpha) {
 
   histogram = (struct dhist *)malloc(sizeof(struct dhist));
 
-  max_count = 1.0 / alpha;
-  expected_count = 1.0 / (alpha * target_buckets);
+  // This comes from summing up a geometric series.
+  max_count = 1.0 / (1.0 - decay_rate);
+  expected_count = 1.0 / ((1.0 - decay_rate) * target_buckets);
 
+  // If the count inside of a bucket is observed to be outside of these
+  // thresholds, split or delete the bucket.
   // XXX(LPE): What are good thresholds?
   radius = 0.8;
   histogram->delete_bucket_threshold = expected_count * (1.0 - radius);
   histogram->split_bucket_threshold = expected_count * (1.0 + radius);
-  histogram->alpha = alpha;
+  histogram->decay_rate = decay_rate;
   histogram->max_num_buckets =
       (uint32_t)CEIL_DIVIDE(max_count, histogram->delete_bucket_threshold);
   histogram->bucket_list = (struct bucket *)malloc(
@@ -207,21 +209,17 @@ dhist_init(int target_buckets, double alpha) {
     pthread_mutex_init(bucket->boundary_mtx, NULL);
     bucket->data->fix_balance_stack_next = NULL;
   }
-
   // We're single threaded in initialization.
   histogram->root = init_bucket(histogram, DHIST_SINGLE_THREADED);
   histogram->num_buckets = 1;
-
   histogram->generation = 0;
-
+  // The pow_table is a cache of the commonly used compound decay factors.
   histogram->pow_table = (double *)malloc(
       histogram->max_num_buckets * sizeof(double));
   for (idx = 0; idx < histogram->max_num_buckets; idx++)
-    histogram->pow_table[idx] = ipow(1.0 - alpha, idx);
-
+    histogram->pow_table[idx] = ipow(decay_rate, idx);
   histogram->tree_mtx = (pthread_mutex_t *)malloc(sizeof(pthread_mutex_t));
   pthread_mutex_init(histogram->tree_mtx, NULL);
-
   histogram->generation_mtx =
       (pthread_mutex_t *)malloc(sizeof(pthread_mutex_t));
   pthread_mutex_init(histogram->generation_mtx, NULL);
@@ -230,7 +228,12 @@ dhist_init(int target_buckets, double alpha) {
 }
 
 void dhist_destroy(struct dhist *histogram) {
-  // TODO free the buckets.
+  unsigned int idx;
+
+  for (idx = 0; idx < histogram->max_num_buckets; idx++)
+    free(histogram->bucket_list[idx].boundary_mtx);
+  free(histogram->bucket_list);
+  free(histogram->bucket_list_data);
   free(histogram->pow_table);
   free(histogram->tree_mtx);
   free(histogram->generation_mtx);
@@ -244,7 +247,7 @@ void dhist_insert(
   double boundary;
 
   do {
-    bucket = find_bucket(histogram, observation, mp_flag);
+    bucket = find_and_lock_bucket(histogram, observation, mp_flag);
 
     // We have a read lock on the bucket that we need to update, but we don't
     // have a write lock until we have both boundary mutexes. If we can't grab
@@ -253,7 +256,8 @@ void dhist_insert(
     // we'll drop our lock and try again.
 
     if (!bucket->below) {
-      // Always insert the observaiton into this bucket.
+      // observation is less than leftmost_bucket->mu; always insert the
+      // observaiton into this bucket.
       boundary = observation;
     } else {
       boundary = compute_bound(histogram, bucket->below, bucket);
@@ -267,7 +271,7 @@ void dhist_insert(
     } else if (observation < boundary) {
       // We need to insert into bucket->below. That bucket exists because we
       // would have created an artificial boundary if it didn't.
-      if (trylock_boundary_succeeded(bucket->below, mp_flag)) {
+      if (trylock_boundary(bucket->below, mp_flag)) {
         add_succeeded = perform_add(
             histogram, bucket->below, observation, true, false, mp_flag);
         unlock_boundary(bucket->below, mp_flag);
@@ -319,6 +323,8 @@ char * dhist_get_json(
   return buffer;
 }
 
+// The caller is expected to manage the memory associated with s_buffer. The
+// return value is one fewer than the number of bytes needed to write the data.
 int
 dhist_snprint_histogram(
     char *s_buffer, size_t n, struct dhist *histogram, const char *title,
@@ -326,11 +332,14 @@ dhist_snprint_histogram(
   struct dhist_info info;
 
   extract_info(histogram, mp_flag, &info);
-  n = snprint_histogram(s_buffer, n, &info, title, xlabel);
+  n = (size_t)snprint_histogram(s_buffer, n, &info, title, xlabel);
   clean_info(&info);
-  return n;
+  return (int)n;
 }
 
+// Returns
+// 1 - ((area covered by both histograms) /
+//      (area covered by one or both histograms))
 double dhist_Jaccard_distance(
     struct dhist *hist1, struct dhist *hist2, int mp_flag) {
   int idx;
@@ -362,6 +371,7 @@ double dhist_Jaccard_distance(
   return distance;
 }
 
+// Returns the maximum distance between the CDFs.
 double dhist_Kolmogorov_Smirnov_statistic(
     struct dhist *hist1, struct dhist *hist2, int mp_flag) {
   int idx;
@@ -392,6 +402,10 @@ double dhist_Kolmogorov_Smirnov_statistic(
   return distance;
 }
 
+// Returns the cost of transforming one distribution into the other by moving
+// the area associated with one left/right to match the shape of the second.
+// If the two distributions were piles of earth, this would give the average
+// distance that each pebble will need to move.
 double dhist_earth_movers_distance(
     struct dhist *hist1, struct dhist *hist2, int mp_flag) {
   int idx;
@@ -489,8 +503,7 @@ double dhist_Cramer_von_Mises_criterion(
 // distribution.
 double dhist_experimental_distance(
     struct dhist *hist1, struct dhist *hist2, int mp_flag) {
-  // FG is 0 or 1 and represents the distribution (0 for info1, 1 for info2).
-  int idx, FG;
+  int idx;
   struct dhist_info info1, info2, info_union, info1_redist, info2_redist;
   struct dhist_info CDF_with_intersections[2], CDF[2];
   // l := lower bound,
@@ -501,18 +514,16 @@ double dhist_experimental_distance(
   // r
   // j
   // acc := accumulator,
-  // c
-  // k
-  double acc, l, u, b, m;
+  double l, u, m, b, acc;
 
   extract_info(hist1, mp_flag, &info1);
   extract_info(hist2, mp_flag, &info2);
   union_of_boundaries(&info1, &info2, &info_union);
   redistribute(&info1, &info_union, &info1_redist);
   redistribute(&info2, &info_union, &info2_redist);
-  redistribute_CDF(&info1_redist, &CDF_with_intersections[0]);
-  redistribute_CDF(&info2_redist, &CDF_with_intersections[1]);
-  redistribute_CDF_no_intersections(
+  compute_CDF(&info1_redist, &CDF_with_intersections[0]);
+  compute_CDF(&info2_redist, &CDF_with_intersections[1]);
+  compute_CDF_no_intersections(
       &CDF_with_intersections[0], &CDF_with_intersections[1],
       &CDF[0], &CDF[1]);
 
@@ -568,7 +579,7 @@ init_bucket(
     bucket = &histogram->bucket_list[idx];
     if (bucket->data->is_enabled)
       continue;
-    if (!trylock_boundary_succeeded(bucket, mp_flag))
+    if (!trylock_boundary(bucket, mp_flag))
       continue;
     if (bucket->data->is_enabled) {
       // We raced or had a stale reference to bucket->data->is_enabled.
@@ -597,8 +608,8 @@ init_bucket(
 }
 
 /*
- * Returns true if the observation is between the lower bucket mu and the
- * current bucket mu.
+ * Returns true if the observation is between the lower bucket mu (inclusive)
+ * and the current bucket mu (exclusive).
  * obs \in [bucket->below->data->mu, bucket->data->mu)
  */
 static bool
@@ -626,6 +637,8 @@ is_target_boundary(struct bucket *bucket, double observation) {
   }
 }
 
+// Identifies the difference in heights of the two sub-trees beneath this node.
+// A possitive return means the right sub-branch is taller.
 static int
 compute_balance(struct bucket *bucket) {
   int dir;
@@ -641,6 +654,7 @@ compute_balance(struct bucket *bucket) {
   return heights[1] - heights[0];
 }
 
+// Obtains both locks associated with a bucket.
 // This is only safe if histogram->tree_mtx is held.
 static void
 obtain_write_lock(struct bucket *bucket, int mp_flag) {
@@ -658,7 +672,7 @@ obtain_write_lock(struct bucket *bucket, int mp_flag) {
   second = bucket->above;
   while (1) {
     lock_boundary(first, mp_flag);
-    if (trylock_boundary_succeeded(second, mp_flag)) {
+    if (trylock_boundary(second, mp_flag)) {
       return;
     }
     unlock_boundary(first, mp_flag);
@@ -686,7 +700,7 @@ lock_boundary(struct bucket *bucket, int mp_flag) {
 }
 
 static bool
-trylock_boundary_succeeded(struct bucket *bucket, int mp_flag) {
+trylock_boundary(struct bucket *bucket, int mp_flag) {
   if (mp_flag & DHIST_SINGLE_THREADED) {
     return true;
   } else if (pthread_mutex_trylock(bucket->boundary_mtx) == 0) {
@@ -705,6 +719,7 @@ unlock_boundary(struct bucket *bucket, int mp_flag) {
   }
 }
 
+// Debugging.
 static void
 _print_tree(struct bucket *bucket, int depth) {
   int i;
@@ -725,12 +740,14 @@ _print_tree(struct bucket *bucket, int depth) {
   }
 }
 
+// Debugging.
 static void
 print_tree(struct bucket *bucket) {
   _print_tree(bucket, 0);
   printf("\n");
 }
 
+// Rebalances this node in the AVL tree.
 static void
 fix_height(struct bucket *bucket) {
   struct bucket *left, *right;
@@ -776,6 +793,7 @@ count_buckets_in_tree(struct bucket *root) {
   }
 }
 
+// Debugging. Make sure that the tree is properly balanced.
 static int
 assert_invariant(struct bucket *root) {
   int left, right, dir;
@@ -852,17 +870,19 @@ assert_invariant(struct bucket *root) {
   }
 }
 
+// Calculate the decay factor that should be applied to a count that hasn't
+// bene updated in missed_generations updates.
 static double
-get_decay(
-    struct dhist *histogram, uint64_t missed_generations) {
+get_decay(struct dhist *histogram, uint64_t missed_generations) {
   if (missed_generations < (uint32_t)histogram->max_num_buckets)
     return histogram->pow_table[missed_generations];
   else
-    return ipow(1.0 - histogram->alpha, missed_generations);
+    return ipow(histogram->decay_rate, missed_generations);
 }
 
+// Get the next generation count and increment the global counter.
 static uint64_t
-get_generation(
+get_next_generation(
     struct dhist *histogram, bool increment, int mp_flag) {
   uint64_t generation;
 
@@ -881,32 +901,33 @@ get_generation(
   return generation;
 }
 
-// We can't increment generation until we finally make our update, but
-// since the boundaries don't move upon decay, we can use any generation
-// value to compute the bounds. We'll use the largest generation so that
-// we don't need to recompute the decay for that bucket.
+// Compute the boundary between two buckets.
 static double
 compute_bound(
     struct dhist *histogram, struct bucket *left, struct bucket *right) {
   uint64_t generation;
   double count_left, mu_left, count_right, mu_right;
 
+  // We can't increment generation until we finally make our update, but since
+  // the boundaries don't move upon decay, we can use any generation value to
+  // compute the bounds. We'll use the largest generation so that we don't need
+  // to recompute the decay for one of the buckets.
   if (!left) {
     return right->data->mu - 0.5;
   } else if (!right) {
     return left->data->mu + 0.5;
   } else if (left->data->update_generation > right->data->update_generation) {
     generation = left->data->update_generation;
-    count_left = left->data->count;
     mu_left = left->data->mu;
-    count_right = compute_count(histogram, right, generation);
     mu_right = right->data->mu;
+    count_left = left->data->count;
+    count_right = compute_count(histogram, right, generation);
   } else {
     generation = right->data->update_generation;
-    count_left = compute_count(histogram, left, generation);
     mu_left = left->data->mu;
-    count_right = right->data->count;
     mu_right = right->data->mu;
+    count_left = compute_count(histogram, left, generation);
+    count_right = right->data->count;
   }
 
   return (
@@ -914,6 +935,7 @@ compute_bound(
       (count_left + count_right));
 }
 
+// Compute the count in a bucket.
 static double compute_count(
     struct dhist *histogram, struct bucket *bucket, uint64_t generation) {
   return (
@@ -921,6 +943,8 @@ static double compute_count(
       get_decay(histogram, generation - bucket->data->update_generation));
 }
 
+// The caller should have a write lock on the bucket. This can fail if one of
+// the recheck_* flags is true and the boundary is not correct.
 static bool
 perform_add(
     struct dhist *histogram, struct bucket *bucket, double observation,
@@ -938,7 +962,7 @@ perform_add(
       return false;
   }
 
-  update_generation = get_generation(histogram, true, mp_flag);
+  update_generation = get_next_generation(histogram, true, mp_flag);
 
   bucket->data->count = 1.0 + compute_count(
       histogram, bucket, update_generation);
@@ -951,14 +975,14 @@ perform_add(
 }
 
 /*
- * This returns the bucket with the greatest mu less than observation (which is
+ * Return the bucket with the greatest mu less than the observation (which is
  * not necessarily the bucket where observation will be inserted) unless the
  * target bucket is the leftmost bucket, in which case observation may be less
  * than bucket->data->mu.
  * If mp_flag & DHIST_MULTI_THREADED, the boundary_mtx for this bucket and its
  * right hand neighbor will be locked.
  */
-static struct bucket * find_bucket(
+static struct bucket * find_and_lock_bucket(
     struct dhist *histogram, double observation, int mp_flag) {
   struct bucket *bucket, *other;
 
@@ -1000,6 +1024,7 @@ static struct bucket * find_bucket(
   return NULL;
 }
 
+// Add a bucket to the AVL tree rebalance stack.
 static void
 fix_balance_enstack(struct dhist *histogram, struct bucket *bucket) {
   if (bucket) {
@@ -1188,12 +1213,6 @@ _split_bucket(struct dhist *histogram, struct bucket *bucket, int mp_flag) {
     median = lower_bound + diameter / 2.0;
     new_bucket->data->mu = median - diameter / 6.0;
     bucket->data->mu = median + diameter / 6.0;
-    //printf("??? lower_bound: %lf, upper_bound: %lf, "
-    //       "diameter: %lf, median: %lf, new_bucket->data->mu: %lf, "
-    //       "bucket->data->mu: %lf\n",
-    //       lower_bound, upper_bound,
-    //       diameter, median, new_bucket->data->mu,
-    //       bucket->data->mu);
   }
   release_write_lock(bucket, mp_flag);
 
@@ -1241,7 +1260,7 @@ _delete_bucket(struct dhist *histogram, struct bucket *bucket, int mp_flag) {
     return;
   }
 
-  generation = get_generation(histogram, false, mp_flag);
+  generation = get_next_generation(histogram, false, mp_flag);
 
   // Decide whether to merge the dying bucket above or below.
   if (bucket->below == NULL) {
@@ -1269,7 +1288,7 @@ _delete_bucket(struct dhist *histogram, struct bucket *bucket, int mp_flag) {
   if (mp_flag & DHIST_MULTI_THREADED) {
     for (idx = 0; idx <= 1; idx++) {
       if (far_buckets[idx] != NULL &&
-          !trylock_boundary_succeeded(far_buckets[idx], mp_flag)) {
+          !trylock_boundary(far_buckets[idx], mp_flag)) {
         // Nuts. It isn't available. Let's restart once it is available.
         if (idx == 1 && far_buckets[0])
           unlock_boundary(far_buckets[0], mp_flag);
@@ -1362,11 +1381,8 @@ _delete_bucket(struct dhist *histogram, struct bucket *bucket, int mp_flag) {
   --histogram->num_buckets;
 }
 
-/*
- * This can efficiently apply the decay for multiple generations. This function
- * will not read histogram->generation since that may be updated by another
- * thread.
- */
+// Update the bucket count to reflect the amount of decay that occurs up
+// until the supplied generation.
 static void
 decay(struct dhist *histogram, struct bucket *bucket, uint64_t generation) {
   if (bucket == NULL || bucket->data->update_generation == generation)
@@ -1377,6 +1393,8 @@ decay(struct dhist *histogram, struct bucket *bucket, uint64_t generation) {
   bucket->data->update_generation = generation;
 }
 
+// Scan through the histogram and record the information associated with the
+// boundaries and counts.
 static void extract_info(
     struct dhist *histogram, int mp_flag, struct dhist_info *info) {
   struct bucket *bucket;
@@ -1393,7 +1411,7 @@ static void extract_info(
       sizeof(double) * 2 * histogram->max_num_buckets + 1);
   info->boundaries = info->weights + histogram->max_num_buckets;
 
-  info->generation = get_generation(histogram, false, mp_flag);
+  info->generation = get_next_generation(histogram, false, mp_flag);
 
   bucket = histogram->root;
   // Astonishingly, this is possibly actually slower than traversing
@@ -1438,6 +1456,7 @@ static void extract_info(
   }
 }
 
+// Free the internal memory associated with a dhist_info object.
 static void
 clean_info(struct dhist_info *info) {
   free(info->weights);
@@ -1457,15 +1476,15 @@ snprint_histogram(
   int idx, num_chars, num_for_call;
   size_t remaining_chars;
 
-#define dhist_snprint_helper() do {       \
-    num_chars += num_for_call;            \
-    if (num_for_call > remaining_chars) { \
-      remaining_chars = 0;                \
-      s_buffer = NULL;                    \
-    } else {                              \
-      s_buffer = s_buffer + num_for_call; \
-      remaining_chars -= num_for_call;    \
-    }                                     \
+#define dhist_snprint_helper() do {               \
+    num_chars += num_for_call;                    \
+    if (num_for_call > (int)remaining_chars) {    \
+      remaining_chars = 0;                        \
+      s_buffer = NULL;                            \
+    } else {                                      \
+      s_buffer = s_buffer + num_for_call;         \
+      remaining_chars -= (size_t)num_for_call;    \
+    }                                             \
   } while (0)
 
   num_chars = 0;
@@ -1519,6 +1538,7 @@ snprint_histogram(
   return num_chars;
 }
 
+// Debugging. Run a bunch of sanity checks.
 static void
 assert_consistent(struct dhist *histogram) {
   uint32_t num_buckets_seen = 0;
@@ -1590,10 +1610,9 @@ assert_consistent(struct dhist *histogram) {
   assert_invariant(histogram->root);
 }
 
-/*
- * Note: This does NOT initialize the weights, although it does reserve
- * enough space that the weights can be calculated later.
- */
+// Identify the boundaries that are observed by one or both of the histograms.
+// Note: This does NOT initialize the weights, although it does reserve
+// enough space that the weights can be calculated later.
 static void
 union_of_boundaries(
     struct dhist_info *info1, struct dhist_info *info2,
@@ -1630,6 +1649,9 @@ union_of_boundaries(
   union_info->num_buckets = union_idx - 1;
 }
 
+// Redistribute the weights so that the old histogram is described, but with
+// the new boundaries. The new boundaries must be a superset of the original
+// boundaries.
 static void
 redistribute(
     struct dhist_info *info_orig, struct dhist_info *info_union,
@@ -1673,7 +1695,7 @@ redistribute(
 }
 
 static void
-redistribute_CDF(
+compute_CDF(
     struct dhist_info *info_in, struct dhist_info *CDF_out) {
   // N == 0 means info1, N == 1 means info2
   int idx;
@@ -1696,7 +1718,7 @@ redistribute_CDF(
   }
 }
 
-static void redistribute_CDF_no_intersections(
+static void compute_CDF_no_intersections(
     struct dhist_info *CDF1_in, struct dhist_info *CDF2_in,
     struct dhist_info *CDF1_out, struct dhist_info *CDF2_out) {
   int idx, out_idx, FG;

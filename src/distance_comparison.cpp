@@ -33,8 +33,8 @@
 #include "dhist.h"
 
 #define NUM_BUCKETS 50
-#define ALPHA_SLOW 0.0001
-#define ALPHA_FAST 0.000417128920021
+#define DECAY_RATE_SLOW (1.0 - 0.0001)
+#define DECAY_RATE_FAST (1.0 - 0.000417128920021)
 
 #define COUNT 10000000
 //#define COUNT 100
@@ -51,8 +51,8 @@ int main() {
   std::normal_distribution<double> normal_0_1(0.0, 1.0);
   std::exponential_distribution<double> exponential_1(1.0);
 
-  dhist_slow = dhist_init(NUM_BUCKETS, ALPHA_SLOW);
-  dhist_fast = dhist_init(NUM_BUCKETS, ALPHA_FAST);
+  dhist_slow = dhist_init(NUM_BUCKETS, DECAY_RATE_SLOW);
+  dhist_fast = dhist_init(NUM_BUCKETS, DECAY_RATE_FAST);
 
   uint64_t last_timestamp, this_timestamp;
   double observation;

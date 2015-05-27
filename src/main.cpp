@@ -34,13 +34,13 @@
 
 #define NUM_BUCKETS 50
 #define NUM_THREADS 1
-#define ALPHA 0.000001
+#define DECAY_RATE 0.999999
 
 // 2.397 * 1024 * 1024 * 1024 is roughly the number of cycles in a second.
 #define CYCLES ((uint64_t)(1 * 2.397 * 1024 * 1024 * 1024))
 #define DHIST_MP_FLAG \
     (NUM_THREADS > 1 ? DHIST_MULTI_THREADED : DHIST_SINGLE_THREADED)
-#define FRAMES_PER_SECOND 5
+#define FRAMES_PER_SECOND 5.01
 
 #define ANIMATE 1
 #define NORMAL_DISTRIBUTION 1
@@ -101,7 +101,7 @@ int main() {
 
   args.stop_timestamp = rdtsc() + CYCLES;
 
-  g_histogram = dhist_init(NUM_BUCKETS, ALPHA);
+  g_histogram = dhist_init(NUM_BUCKETS, DECAY_RATE);
 
   for (int i = 0; i < NUM_THREADS; i++)
     pthread_create(

@@ -26,8 +26,8 @@
  */
 
 
-#ifndef DECAYING_HISTOGRAM_H_
-#define DECAYING_HISTOGRAM_H_
+#ifndef DECAYING_HISTOGRAM_SRC_DHIST_H_
+#define DECAYING_HISTOGRAM_SRC_DHIST_H_
 
 #ifdef __cplusplus
 extern "C" {
@@ -43,7 +43,7 @@ extern const int DHIST_MULTI_THREADED;
 struct dhist {
   double delete_bucket_threshold;
   double split_bucket_threshold;
-  double alpha;
+  double decay_rate;
   uint64_t generation;
   struct bucket *root;
   // The bucket_list is a pool of buckets that are allocated at initialization
@@ -58,7 +58,7 @@ struct dhist {
   struct bucket *fix_balance_stack;
 };
 
-struct dhist * dhist_init(int target_buckets, double alpha);
+struct dhist * dhist_init(int target_buckets, double decay_rate);
 void dhist_destroy(struct dhist *histogram);
 void dhist_insert(struct dhist *histogram, double observation, int mp_flag);
 char * dhist_get_json(
@@ -83,5 +83,5 @@ double dhist_experimental_distance(
 }
 #endif
 
-#endif  /* DECAYING_HISTOGRAM_H_ */
+#endif  // DECAYING_HISTOGRAM_SRC_DHIST_H_
 
