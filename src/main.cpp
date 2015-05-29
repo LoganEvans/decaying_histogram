@@ -42,7 +42,7 @@
     (NUM_THREADS > 1 ? DHIST_MULTI_THREADED : DHIST_SINGLE_THREADED)
 #define FRAMES_PER_SECOND 5.01
 
-#define ANIMATE 1
+#define ANIMATE 0
 #define NORMAL_DISTRIBUTION 1
 
 static struct dhist *g_histogram;

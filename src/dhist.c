@@ -181,17 +181,21 @@ dhist_init(int target_buckets, double decay_rate) {
 
   histogram = (struct dhist *)malloc(sizeof(struct dhist));
 
-  // This comes from summing up a geometric series.
-  max_count = 1.0 / (1.0 - decay_rate);
-  expected_count = 1.0 / ((1.0 - decay_rate) * target_buckets);
-
   // If the count inside of a bucket is observed to be outside of these
   // thresholds, split or delete the bucket.
   // XXX(LPE): What are good thresholds?
   radius = 0.8;
+  expected_count = MAX(
+      1.0 / ((1.0 - decay_rate) * target_buckets),  // Normal count.
+      1.0 / (1.0 - radius));  // Makes delete threshold greater than one.
+
   histogram->delete_bucket_threshold = expected_count * (1.0 - radius);
   histogram->split_bucket_threshold = expected_count * (1.0 + radius);
   histogram->decay_rate = decay_rate;
+
+  // This comes from the sum of a geometric series.
+  max_count = 1.0 / (1.0 - decay_rate);
+
   histogram->max_num_buckets =
       (uint32_t)CEIL_DIVIDE(max_count, histogram->delete_bucket_threshold);
   histogram->bucket_list = (struct bucket *)malloc(
