@@ -21,41 +21,52 @@ def parse_options():
 
     return parser.parse_args()
 
+MAXY = None
+
 def update(num, cli_args):
     global _color_order
-    frames = cli_args.frames
-    new_data = json.loads(sys.stdin.readline())
-    if new_data["id"] not in update.memos:
-        update.memos[new_data["id"]] = {
-                "color": _color_order[0],
-                "history": []}
-        _color_order = _color_order[1:] + [_color_order[0]]
-    new_memo = update.memos[new_data["id"]]
+    try:
+        frames = cli_args.frames
+        new_data = json.loads(sys.stdin.readline())
+        if new_data["id"] not in update.memos:
+            update.memos[new_data["id"]] = {
+                    "color": _color_order[0],
+                    "history": []}
+            _color_order = _color_order[1:] + [_color_order[0]]
+        new_memo = update.memos[new_data["id"]]
 
-    if len(new_memo["history"]) > frames:
-        new_memo["history"].pop()
-    new_memo["history"].insert(0, new_data)
+        if len(new_memo["history"]) > frames:
+            new_memo["history"].pop()
+        new_memo["history"].insert(0, new_data)
 
-    pyplot.cla()
-    if "title" in new_data:
-        pyplot.title(new_data["title"])
-    if "xlabel" in new_data:
-        pyplot.xlabel(new_data["xlabel"])
+        pyplot.cla()
+        if "title" in new_data:
+            pyplot.title(new_data["title"])
+        if "xlabel" in new_data:
+            pyplot.xlabel(new_data["xlabel"])
 
-    ymax = None
-    for memo in update.memos.values():
-        for idx, data in enumerate(reversed(memo["history"])):
-            weights = np.array(data['weights'])
-            boundaries = np.array(data['boundaries'])
-            widths = boundaries[1:] - boundaries[:-1]
-            max_weights = max(weights)
-            if ymax is None or max_weights > ymax:
-                ymax = max_weights
-            pyplot.fill_between(
-                    boundaries.repeat(2)[1:-1], weights.repeat(2),
-                    facecolor=memo["color"],
-                    alpha=cli_args.alpha * ((idx + 1.0) / len(memo["history"])))
-    pyplot.ylim(0, ymax)
+        ymax = None
+        for memo in update.memos.values():
+            for idx, data in enumerate(reversed(memo["history"])):
+                if MAXY:
+                    weights = np.array([min(MAXY, weight) for weight in data['weights']])
+                else:
+                    weights = np.array(data['weights'])
+                boundaries = np.array(data['boundaries'])
+                try:
+                    widths = boundaries[1:] - boundaries[:-1]
+                    max_weights = max(weights)
+                    if ymax is None or max_weights > ymax:
+                        ymax = max_weights
+                    pyplot.fill_between(
+                            boundaries.repeat(2)[1:-1], weights.repeat(2),
+                            facecolor=memo["color"],
+                            alpha=cli_args.alpha * ((idx + 1.0) / len(memo["history"])))
+                except:
+                    pass
+        pyplot.ylim(0, ymax)
+    except:
+        pass
 update.memos = {}
 
 if __name__ == '__main__':

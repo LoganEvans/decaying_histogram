@@ -36,7 +36,9 @@
 
 #define SUCCESS 9001
 #define FAILURE 9000
-#define ANIMATE 0
+#define ANIMATE 1
+#define PROFILE_FREE 0
+
 uint64_t NUM_BUCKETS = 30;
 double DECAY_RATE = 0.99999;
 uint64_t FRAMES_PER_SECOND = 5;
@@ -47,7 +49,7 @@ uint64_t MAX_NUM_THREADS = 255;
 uint64_t CYCLES_PER_TRIAL = 5ULL * 2.397 * 1024 * 1024 * 1024;
 uint64_t PERMITTED_BYTES = 1ULL * 1024 * 1024 * 1024;
 
-bool CONSTANT_SPACE_PER_TRIAL[] = {true, false};
+bool CONSTANT_SPACE_PER_TRIAL[] = {false};
 
 uint64_t BYTES_PER_MALLOC[] = {
   8ULL,  // tiny
@@ -110,21 +112,25 @@ thread_func(void *args) {
     if (buffer[malloc_idx] == NULL) {
       start_timestamp = rdtsc();
       buffer[malloc_idx] = (char *)malloc(bytes_per_malloc);
-      if (buffer[malloc_idx] == NULL) {
-        assert(false);
-      }
       stop_timestamp = rdtsc();
-#if ANIMATE
+#if ANIMATE && !PROFILE_FREE
       dhist_insert(
           g_histogram, log2(stop_timestamp - start_timestamp),
           DHIST_MULTI_THREADED);
-#else
+#endif  // ANIMATE
       num_mallocs_out++;
       total_cycles_out += stop_timestamp - start_timestamp;
-#endif
     } else {
+      start_timestamp = rdtsc();
       free(buffer[malloc_idx]);
+      stop_timestamp = rdtsc();
       buffer[malloc_idx] = NULL;
+
+#if ANIMATE && PROFILE_FREE
+      dhist_insert(
+          g_histogram, log2(stop_timestamp - start_timestamp),
+          DHIST_MULTI_THREADED);
+#endif
     }
   }
 
