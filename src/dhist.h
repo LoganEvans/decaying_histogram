@@ -55,7 +55,10 @@ struct dhist {
   double *pow_table;
   pthread_mutex_t *tree_mtx;
   pthread_mutex_t *generation_mtx;
+  pthread_mutex_t *thread_info_mtx;
   struct bucket *fix_balance_stack;
+  struct thread_info *thread_info_head;
+  struct thread_info *thread_info_tail;
 };
 
 struct dhist * dhist_init(int target_buckets, double decay_rate);

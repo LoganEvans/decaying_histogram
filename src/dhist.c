@@ -98,9 +98,20 @@ struct dhist_info {
   int num_boundaries;
 };
 
+struct thread_info {
+  struct thread_info *prev;
+  struct thread_info *next;
+  struct bucket *bucket_to_free;
+};
+
 static double ipow(double coefficient, uint64_t power);
 
-static struct bucket * init_bucket(struct dhist *histogram, int mp_flag);
+static struct bucket * bucket_init(int mp_flag);
+static void bucket_destroy(struct bucket *bucket);
+void thread_info_init_fields(
+    struct dhist *histogram, struct thread_info *info, int mp_flag);
+static void thread_info_finalize(
+    struct dhist *histogram, struct thread_info *info, int mp_flag);
 static bool is_target_boundary(struct bucket *bucket, double observation);
 static int compute_balance(struct bucket *bucket);
 static void obtain_write_lock(struct bucket *bucket, int mp_flag);
@@ -176,7 +187,6 @@ dhist_init(int target_buckets, double decay_rate) {
   struct dhist *histogram;
   double max_count, expected_count;
   uint64_t idx;
-  struct bucket *bucket;
   double radius;
 
   histogram = (struct dhist *)malloc(sizeof(struct dhist));
@@ -198,23 +208,10 @@ dhist_init(int target_buckets, double decay_rate) {
 
   histogram->max_num_buckets =
       (uint32_t)CEIL_DIVIDE(max_count, histogram->delete_bucket_threshold);
-  histogram->bucket_list = (struct bucket *)malloc(
-      histogram->max_num_buckets * sizeof(struct bucket));
-  histogram->bucket_list_data = (struct bucket_data *)malloc(
-      histogram->max_num_buckets * sizeof(struct bucket_data));
   histogram->fix_balance_stack = NULL;
-  for (idx = 0; idx < histogram->max_num_buckets; idx++) {
-    bucket = &histogram->bucket_list[idx];
-    bucket->data = &histogram->bucket_list_data[idx];
-    bucket->data->is_enabled = false;
-    bucket->data->lock_held = false;
-    bucket->boundary_mtx =
-      (pthread_mutex_t *)malloc(sizeof(pthread_mutex_t));
-    pthread_mutex_init(bucket->boundary_mtx, NULL);
-    bucket->data->fix_balance_stack_next = NULL;
-  }
+
   // We're single threaded in initialization.
-  histogram->root = init_bucket(histogram, DHIST_SINGLE_THREADED);
+  histogram->root = bucket_init(DHIST_SINGLE_THREADED);
   histogram->num_buckets = 1;
   histogram->generation = 0;
   // The pow_table is a cache of the commonly used compound decay factors.
@@ -222,25 +219,40 @@ dhist_init(int target_buckets, double decay_rate) {
       histogram->max_num_buckets * sizeof(double));
   for (idx = 0; idx < histogram->max_num_buckets; idx++)
     histogram->pow_table[idx] = ipow(decay_rate, idx);
+
+  histogram->thread_info_head = histogram->thread_info_tail = NULL;
+
   histogram->tree_mtx = (pthread_mutex_t *)malloc(sizeof(pthread_mutex_t));
-  pthread_mutex_init(histogram->tree_mtx, NULL);
   histogram->generation_mtx =
       (pthread_mutex_t *)malloc(sizeof(pthread_mutex_t));
+  histogram->thread_info_mtx =
+      (pthread_mutex_t *)malloc(sizeof(pthread_mutex_t));
+
+  pthread_mutex_init(histogram->tree_mtx, NULL);
   pthread_mutex_init(histogram->generation_mtx, NULL);
+  pthread_mutex_init(histogram->thread_info_mtx, NULL);
 
   return histogram;
 }
 
 void dhist_destroy(struct dhist *histogram) {
-  unsigned int idx;
+  struct bucket *bucket, *memo;
 
-  for (idx = 0; idx < histogram->max_num_buckets; idx++)
-    free(histogram->bucket_list[idx].boundary_mtx);
-  free(histogram->bucket_list);
-  free(histogram->bucket_list_data);
+  // Select leftmost bucket.
+  bucket = histogram->root;
+  while (bucket->children[0])
+    bucket = bucket->children[0];
+
+  while (bucket) {
+    memo = bucket;
+    bucket = bucket->above;
+    bucket_destroy(memo);
+  }
+
   free(histogram->pow_table);
   free(histogram->tree_mtx);
   free(histogram->generation_mtx);
+  free(histogram->thread_info_mtx);
   free(histogram);
 }
 
@@ -249,6 +261,9 @@ void dhist_insert(
   struct bucket *bucket;
   bool add_succeeded;
   double boundary;
+  struct thread_info info;
+
+  thread_info_init_fields(histogram, &info, mp_flag);
 
   do {
     bucket = find_and_lock_bucket(histogram, observation, mp_flag);
@@ -308,6 +323,8 @@ void dhist_insert(
   if (bucket->data->count > histogram->split_bucket_threshold) {
     split_bucket(histogram, bucket, mp_flag);
   }
+
+  thread_info_finalize(histogram, &info, mp_flag);
 }
 
 // The caller needs to call free on the result.
@@ -574,26 +591,19 @@ ipow(double coefficient, uint64_t power) {
 }
 
 static struct bucket *
-init_bucket(
-    struct dhist *histogram, int mp_flag) {
-  struct bucket *bucket = NULL;
-  uint32_t idx;
+bucket_init(int mp_flag) {
+  struct bucket *bucket;
 
-  for (idx = 0; idx < histogram->max_num_buckets; idx++) {
-    bucket = &histogram->bucket_list[idx];
-    if (bucket->data->is_enabled)
-      continue;
-    if (!trylock_boundary(bucket, mp_flag))
-      continue;
-    if (bucket->data->is_enabled) {
-      // We raced or had a stale reference to bucket->data->is_enabled.
-      unlock_boundary(bucket, mp_flag);
-      continue;
-    }
-    break;
-  }
+  bucket = (struct bucket *)malloc(sizeof(struct bucket));
+  bucket->data = (struct bucket_data *)malloc(sizeof(struct bucket));
+
+  bucket->boundary_mtx =
+    (pthread_mutex_t *)malloc(sizeof(pthread_mutex_t));
+  pthread_mutex_init(bucket->boundary_mtx, NULL);
+  bucket->data->fix_balance_stack_next = NULL;
 
   bucket->data->is_enabled = true;
+  bucket->data->lock_held = false;
   bucket->data->count = 0.0;
   bucket->data->mu = 0.0;
   bucket->data->update_generation = 0;
@@ -609,6 +619,96 @@ init_bucket(
   unlock_boundary(bucket, mp_flag);
 
   return bucket;
+}
+
+void
+bucket_destroy(struct bucket *bucket) {
+  free(bucket->data);
+  free(bucket->boundary_mtx);
+  free(bucket);
+}
+
+void
+thread_info_init_fields(
+    struct dhist *histogram, struct thread_info *info, int mp_flag) {
+  info->next = NULL;
+  info->bucket_to_free = NULL;
+
+  if (mp_flag & DHIST_MULTI_THREADED)
+    pthread_mutex_lock(histogram->thread_info_mtx);
+
+  if (histogram->thread_info_tail == NULL &&
+      histogram->thread_info_head != NULL) {
+    printf("invariant violated\n");
+    assert(false);
+  }
+
+  if (histogram->thread_info_tail == NULL) {
+    info->prev = NULL;
+    histogram->thread_info_head = histogram->thread_info_tail = info;
+  } else {
+    histogram->thread_info_tail->next = info;
+    info->prev = histogram->thread_info_tail;
+    histogram->thread_info_tail = info;
+  }
+
+  if (mp_flag & DHIST_MULTI_THREADED)
+    pthread_mutex_unlock(histogram->thread_info_mtx);
+}
+
+void
+thread_info_finalize(
+    struct dhist *histogram, struct thread_info *info, int mp_flag) {
+  struct thread_info *prior, *post, *memo;
+
+  if (mp_flag & DHIST_MULTI_THREADED)
+    pthread_mutex_lock(histogram->thread_info_mtx);
+
+  // Find the forward limit of this chain.
+  memo = info;
+  prior = info->prev;
+  while (prior && prior->bucket_to_free) {
+    memo = prior;
+    prior = prior->prev;
+  }
+  memo->prev = NULL;
+
+  // Correct the items after this chain.
+  post = info->next;
+  if (post) {
+    post->prev = prior;
+    post->next = NULL;
+  } else {
+    histogram->thread_info_tail = prior;
+  }
+
+  // Correct the items before this chain.
+  if (prior) {
+    prior->prev = NULL;
+    prior->next = post;
+  } else {
+    histogram->thread_info_head = post;
+  }
+
+  if (histogram->thread_info_tail == NULL &&
+      histogram->thread_info_head != NULL) {
+    printf("invariant violated\n");
+    assert(false);
+  }
+
+  if (mp_flag & DHIST_MULTI_THREADED)
+    pthread_mutex_unlock(histogram->thread_info_mtx);
+
+  // Delete any excess buckets and their info tokens. Don't free info since
+  // it's stack allocated.
+  memo = info->prev;
+  while (memo) {
+    if (memo->bucket_to_free)
+      free(memo->bucket_to_free);
+    prior = memo->prev;
+    free(memo);
+    memo = prior;
+  }
 }
 
 /*
@@ -1188,7 +1288,7 @@ _split_bucket(struct dhist *histogram, struct bucket *bucket, int mp_flag) {
     return;
   }
 
-  new_bucket = init_bucket(histogram, mp_flag);
+  new_bucket = bucket_init(mp_flag);
   ++histogram->num_buckets;
   new_bucket->parent = bucket;
 
@@ -1254,6 +1354,7 @@ _delete_bucket(struct dhist *histogram, struct bucket *bucket, int mp_flag) {
   int dir_from_parent, dir, balance, idx;
   uint64_t generation;
   double below_count, above_count;
+  struct thread_info *info;
 
  restart:
   obtain_write_lock(bucket, mp_flag);
@@ -1370,17 +1471,26 @@ _delete_bucket(struct dhist *histogram, struct bucket *bucket, int mp_flag) {
   if (attach)
     fix_balance(histogram, attach);
 
-  // Return bucket to the pool.
+  // Prepare and schedule bucket for destruction.
   other = bucket->above;
   bucket->below = bucket->above = NULL;
   bucket->children[0] = bucket->children[1] = NULL;
   bucket->data->is_enabled = false;
-
   if (mp_flag & DHIST_MULTI_THREADED) {
     unlock_boundary(bucket, mp_flag);
     if (other)
       unlock_boundary(other, mp_flag);
   }
+  info = (struct thread_info *)malloc(sizeof(struct thread_info));
+  info->prev = NULL;
+  info->bucket_to_free = bucket;
+  if (mp_flag & DHIST_MULTI_THREADED)
+    pthread_mutex_lock(histogram->thread_info_mtx);
+  info->next = histogram->thread_info_head;
+  histogram->thread_info_head->prev = info;
+  histogram->thread_info_head = info;
+  if (mp_flag & DHIST_MULTI_THREADED)
+    pthread_mutex_unlock(histogram->thread_info_mtx);
 
   --histogram->num_buckets;
 }
