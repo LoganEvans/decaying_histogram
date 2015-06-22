@@ -32,8 +32,8 @@
 #include "dhist.h"
 #include <random>
 
-#define NUM_BUCKETS 500
-#define NUM_THREADS 4
+#define NUM_BUCKETS 50
+#define NUM_THREADS 2
 #define DECAY_RATE 0.9999
 
 // 2.397 * 1024 * 1024 * 1024 is roughly the number of cycles in a second.

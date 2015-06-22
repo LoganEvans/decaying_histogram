@@ -112,6 +112,8 @@ void thread_info_init_fields(
     struct dhist *histogram, struct thread_info *info, int mp_flag);
 static void thread_info_finalize(
     struct dhist *histogram, struct thread_info *info, int mp_flag);
+static void schedule_bucket_destruction(
+    struct dhist *histogram, struct bucket *bucket, int mp_flag);
 static bool is_target_boundary(struct bucket *bucket, double observation);
 static int compute_balance(struct bucket *bucket);
 static void obtain_write_lock(struct bucket *bucket, int mp_flag);
@@ -637,12 +639,6 @@ thread_info_init_fields(
   if (mp_flag & DHIST_MULTI_THREADED)
     pthread_mutex_lock(histogram->thread_info_mtx);
 
-  if (histogram->thread_info_tail == NULL &&
-      histogram->thread_info_head != NULL) {
-    printf("invariant violated\n");
-    assert(false);
-  }
-
   if (histogram->thread_info_tail == NULL) {
     info->prev = NULL;
     histogram->thread_info_head = histogram->thread_info_tail = info;
@@ -664,36 +660,59 @@ thread_info_finalize(
   if (mp_flag & DHIST_MULTI_THREADED)
     pthread_mutex_lock(histogram->thread_info_mtx);
 
-  // Find the forward limit of this chain.
-  memo = info;
-  prior = info->prev;
-  while (prior && prior->bucket_to_free) {
-    memo = prior;
-    prior = prior->prev;
-  }
-  memo->prev = NULL;
+  if ((info->next == NULL || info->next->bucket_to_free) &&
+      (info->prev && info->prev->bucket_to_free)) {
+    // We have work to do.
 
-  // Correct the items after this chain.
-  post = info->next;
-  if (post) {
-    post->prev = prior;
-    post->next = NULL;
+    // Find the element before our chain of work.
+    memo = info;
+    prior = memo->prev;
+    while (prior && prior->bucket_to_free) {
+      memo = prior;
+      prior = memo->prev;
+    }
+    memo->prev = NULL;
+    if (prior) {
+      prior->next == NULL;
+    }
+
+    post = info->next;
+
+    if (histogram->thread_info_head == memo) {
+      histogram->thread_info_head = post;
+      if (histogram->thread_info_head) {
+        histogram->thread_info_head->prev = NULL;
+      }
+    }
+
+    if (histogram->thread_info_tail == info) {
+      histogram->thread_info_tail = prior;
+      if (histogram->thread_info_tail) {
+        histogram->thread_info_tail->next = NULL;
+      }
+    }
   } else {
-    histogram->thread_info_tail = prior;
-  }
+    // We need to remove this thread_info node from the list, but that's all.
+    if (histogram->thread_info_head == info) {
+      histogram->thread_info_head = info->next;
+      if (histogram->thread_info_head) {
+        histogram->thread_info_head->prev = NULL;
+      }
+    }
 
-  // Correct the items before this chain.
-  if (prior) {
-    prior->prev = NULL;
-    prior->next = post;
-  } else {
-    histogram->thread_info_head = post;
-  }
+    if (histogram->thread_info_tail == info) {
+      histogram->thread_info_tail = info->prev;
+      if (histogram->thread_info_tail) {
+        histogram->thread_info_tail->next = NULL;
+      }
+    }
 
-  if (histogram->thread_info_tail == NULL &&
-      histogram->thread_info_head != NULL) {
-    printf("invariant violated\n");
-    assert(false);
+    if (info->prev)
+      info->prev->next = info->next;
+    if (info->next)
+      info->next->prev = info->prev;
+
+    info->prev = NULL;
   }
 
   if (mp_flag & DHIST_MULTI_THREADED)
@@ -704,11 +723,36 @@ thread_info_finalize(
   memo = info->prev;
   while (memo) {
     if (memo->bucket_to_free)
-      free(memo->bucket_to_free);
+      bucket_destroy(memo->bucket_to_free);
     prior = memo->prev;
     free(memo);
     memo = prior;
   }
+}
+
+// Schedule the bucket for destruction (this will happen as some thread
+// processes thread_info_finalize). This does not unlock the boundaries, but
+// it does set all relevant fields and flags.
+static void schedule_bucket_destruction(
+    struct dhist *histogram, struct bucket *bucket, int mp_flag) {
+  struct thread_info *info;
+
+  // Prepare and schedule bucket for destruction.
+  bucket->data->is_enabled = false;
+  bucket->below = bucket->above = NULL;
+  bucket->children[0] = bucket->children[1] = NULL;
+  info = (struct thread_info *)malloc(sizeof(struct thread_info));
+  info->prev = NULL;
+  info->bucket_to_free = bucket;
+  if (mp_flag & DHIST_MULTI_THREADED)
+    pthread_mutex_lock(histogram->thread_info_mtx);
+
+  info->next = histogram->thread_info_head;
+  histogram->thread_info_head->prev = info;
+  histogram->thread_info_head = info;
+
+  if (mp_flag & DHIST_MULTI_THREADED)
+    pthread_mutex_unlock(histogram->thread_info_mtx);
 }
 
 /*
@@ -1471,26 +1515,13 @@ _delete_bucket(struct dhist *histogram, struct bucket *bucket, int mp_flag) {
   if (attach)
     fix_balance(histogram, attach);
 
-  // Prepare and schedule bucket for destruction.
   other = bucket->above;
-  bucket->below = bucket->above = NULL;
-  bucket->children[0] = bucket->children[1] = NULL;
-  bucket->data->is_enabled = false;
+  schedule_bucket_destruction(histogram, bucket, mp_flag);
   if (mp_flag & DHIST_MULTI_THREADED) {
     unlock_boundary(bucket, mp_flag);
     if (other)
       unlock_boundary(other, mp_flag);
   }
-  info = (struct thread_info *)malloc(sizeof(struct thread_info));
-  info->prev = NULL;
-  info->bucket_to_free = bucket;
-  if (mp_flag & DHIST_MULTI_THREADED)
-    pthread_mutex_lock(histogram->thread_info_mtx);
-  info->next = histogram->thread_info_head;
-  histogram->thread_info_head->prev = info;
-  histogram->thread_info_head = info;
-  if (mp_flag & DHIST_MULTI_THREADED)
-    pthread_mutex_unlock(histogram->thread_info_mtx);
 
   --histogram->num_buckets;
 }
