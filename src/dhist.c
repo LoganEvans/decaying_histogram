@@ -32,11 +32,6 @@
 
 #include "src/dhist.h"
 
-// The same as ceil(x / y). Using this so that math.h is not a dependency.
-#ifndef CEIL_DIVIDE
-#define CEIL_DIVIDE(x, y) ((int)((x) + ((int)(y) - 1)) / (int)(y))
-#endif
-
 #ifndef ABS
 #define ABS(x) ((x) >= 0 ? (x) : -(x))
 #endif
@@ -130,6 +125,7 @@ static void set_child(struct bucket *root, struct bucket *child, int dir);
 static int count_buckets_in_tree(struct bucket *root);
 static int assert_invariant(struct bucket *root);
 
+static double split_threshold(struct dhist *histogram);
 static double get_decay(struct dhist *histogram, uint64_t missed_generations);
 static uint64_t get_next_generation(
     struct dhist *histogram, bool increment, int mp_flag);
@@ -151,13 +147,11 @@ static struct bucket * rotate_single(
     struct dhist *histogram, struct bucket *root, int dir);
 static struct bucket * rotate_double(
     struct dhist *histogram, struct bucket *root, int dir);
+static void handle_bucket_split_and_delete(
+    struct dhist *histogram, struct bucket *bucket, int mp_flag);
 static void split_bucket(
     struct dhist *histogram, struct bucket *bucket, int mp_flag);
-static void _split_bucket(
-    struct dhist *histogram, struct bucket *bucket, int mp_flag);
 static void delete_bucket(
-    struct dhist *histogram, struct bucket *bucket, int mp_flag);
-static void _delete_bucket(
     struct dhist *histogram, struct bucket *bucket, int mp_flag);
 static void decay(
     struct dhist *histogram, struct bucket *bucket, uint64_t generation);
@@ -187,7 +181,7 @@ const int DHIST_MULTI_THREADED = 1 << 1;
 
 
 struct dhist *
-dhist_init(int target_buckets, double decay_rate) {
+dhist_init(uint32_t target_buckets, double decay_rate) {
   struct dhist *histogram;
   double max_count, expected_count;
   uint64_t idx;
@@ -203,15 +197,13 @@ dhist_init(int target_buckets, double decay_rate) {
       1.0 / ((1.0 - decay_rate) * target_buckets),  // Normal count.
       1.0 / (1.0 - radius));  // Makes delete threshold greater than one.
 
-  histogram->delete_bucket_threshold = expected_count * (1.0 - radius);
-  histogram->split_bucket_threshold = expected_count * (1.0 + radius);
   histogram->decay_rate = decay_rate;
+  histogram->total_count = 0.0;
 
   // This comes from the sum of a geometric series.
   max_count = 1.0 / (1.0 - decay_rate);
 
-  histogram->max_num_buckets =
-      (uint32_t)CEIL_DIVIDE(max_count, histogram->delete_bucket_threshold);
+  histogram->target_num_buckets = target_buckets;
   histogram->fix_balance_stack = NULL;
 
   // We're single threaded in initialization.
@@ -220,8 +212,8 @@ dhist_init(int target_buckets, double decay_rate) {
   histogram->generation = 0;
   // The pow_table is a cache of the commonly used compound decay factors.
   histogram->pow_table = (double *)malloc(
-      histogram->max_num_buckets * sizeof(double));
-  for (idx = 0; idx < histogram->max_num_buckets; idx++)
+      2 * histogram->target_num_buckets * sizeof(double));
+  for (idx = 0; idx < 2 * histogram->target_num_buckets; idx++)
     histogram->pow_table[idx] = ipow(decay_rate, idx);
 
   histogram->thread_info_head = histogram->thread_info_tail = NULL;
@@ -320,13 +312,8 @@ void dhist_insert(
     unlock_boundary(bucket, mp_flag);
   } while (!add_succeeded);
 
-  if (bucket->data->count < histogram->delete_bucket_threshold &&
-      histogram->num_buckets > 1) {
-    delete_bucket(histogram, bucket, mp_flag);
-  }
-  if (bucket->data->count > histogram->split_bucket_threshold) {
-    split_bucket(histogram, bucket, mp_flag);
-  }
+  if (bucket->data->count > split_threshold(histogram))
+    handle_bucket_split_and_delete(histogram, bucket, mp_flag);
 
   thread_info_finalize(histogram, &info, mp_flag);
 }
@@ -651,9 +638,9 @@ bucket_destroy(struct bucket *bucket) {
 //
 // It's desirable to permit a continuous unit of time because it's possible to
 // get a consistent clock across several processors. This will make it possible
-// to create a dhist for each processor. Even if it's not possible to make
-// each of those be single threaded, doing this will eliminate many of the
-// cache misses.
+// to create a dhist for each processor. Even if it's not possible to make each
+// of those be single threaded, doing this will eliminate many of the cache
+// misses.
 //
 // The process of merging multiple continuous time histograms together doesn't
 // lose much information, which makes this route desirable.
@@ -759,7 +746,8 @@ thread_info_finalize(
 
 // Schedule the bucket for destruction (this will happen as some thread
 // processes thread_info_finalize). This does not unlock the boundaries, but
-// it does set all relevant fields and flags.
+// it does set all relevant fields and flags. The caller needs to hold
+// tree_mtx.
 static void schedule_bucket_destruction(
     struct dhist *histogram, struct bucket *bucket, int mp_flag) {
   struct thread_info *info;
@@ -1049,10 +1037,14 @@ assert_invariant(struct bucket *root) {
 // bene updated in missed_generations updates.
 static double
 get_decay(struct dhist *histogram, uint64_t missed_generations) {
-  if (missed_generations < (uint32_t)histogram->max_num_buckets)
+  if (missed_generations < 2 * (uint32_t)histogram->target_num_buckets)
     return histogram->pow_table[missed_generations];
   else
     return ipow(histogram->decay_rate, missed_generations);
+}
+
+double split_threshold(struct dhist *histogram) {
+  return 2 * (histogram->total_count / histogram->target_num_buckets);
 }
 
 // Get the next generation count and increment the global counter.
@@ -1063,8 +1055,11 @@ get_next_generation(
 
   if (mp_flag & DHIST_MULTI_THREADED) {
     pthread_mutex_lock(histogram->generation_mtx);
-    if (increment)
+    if (increment) {
       ++histogram->generation;
+      histogram->total_count =
+          1.0 + histogram->total_count * histogram->decay_rate;
+    }
     generation = histogram->generation;
     pthread_mutex_unlock(histogram->generation_mtx);
   } else {
@@ -1318,46 +1313,44 @@ rotate_double(struct dhist *histogram, struct bucket *root, int dir) {
   return new_root;
 }
 
-static void
-split_bucket(struct dhist *histogram, struct bucket *bucket, int mp_flag) {
+// Split the bucket. If we grew past target_num_buckets, find the least
+// populated bucket and schedule it for destruction.
+void
+handle_bucket_split_and_delete(
+    struct dhist *histogram, struct bucket *bucket, int mp_flag) {
+  struct bucket *cursor, *min_bucket;
+
   if (mp_flag & DHIST_MULTI_THREADED)
     pthread_mutex_lock(histogram->tree_mtx);
 
-  if (bucket->data->is_enabled)
-    _split_bucket(histogram, bucket, mp_flag);
+  split_bucket(histogram, bucket, mp_flag);
+
+  if (histogram->num_buckets > histogram->target_num_buckets) {
+    cursor = histogram->root;
+    while (cursor->children[0])
+      cursor = cursor->children[0];
+
+    min_bucket = cursor;
+    while (cursor) {
+      if (cursor->data->is_enabled &&
+          cursor->data->count < min_bucket->data->count)
+        min_bucket = cursor;
+      cursor = cursor->above;
+    }
+
+    delete_bucket(histogram, min_bucket, mp_flag);
+  }
 
   if (mp_flag & DHIST_MULTI_THREADED)
     pthread_mutex_unlock(histogram->tree_mtx);
 }
 
 static void
-_split_bucket(struct dhist *histogram, struct bucket *bucket, int mp_flag) {
+split_bucket(struct dhist *histogram, struct bucket *bucket, int mp_flag) {
   double lower_bound, upper_bound, diameter, median;
-  struct bucket *new_bucket, *cursor, *memo;
-
-  // If we would exceed max_num_buckets, we need to first reclaim some old
-  // buckets.
-  if (histogram->num_buckets >= histogram->max_num_buckets) {
-    cursor = histogram->root;
-    while (cursor->children[0])
-      cursor = cursor->children[0];
-
-    while (cursor) {
-      memo = cursor->above;
-      if (cursor->data->count < histogram->delete_bucket_threshold &&
-          histogram->num_buckets > 1) {
-        _delete_bucket(histogram, cursor, mp_flag);
-      }
-      cursor = memo;
-    }
-  }
+  struct bucket *new_bucket, *memo;
 
   obtain_write_lock(bucket, mp_flag);
-  if (bucket->data->count <= histogram->split_bucket_threshold) {
-    // We raced and lost.
-    release_write_lock(bucket, mp_flag);
-    return;
-  }
 
   new_bucket = bucket_init(mp_flag);
   ++histogram->num_buckets;
@@ -1408,18 +1401,6 @@ _split_bucket(struct dhist *histogram, struct bucket *bucket, int mp_flag) {
 
 static void
 delete_bucket(struct dhist *histogram, struct bucket *bucket, int mp_flag) {
-  if (mp_flag & DHIST_MULTI_THREADED)
-    pthread_mutex_lock(histogram->tree_mtx);
-
-  if (bucket->data->is_enabled)
-    _delete_bucket(histogram, bucket, mp_flag);
-
-  if (mp_flag & DHIST_MULTI_THREADED)
-    pthread_mutex_unlock(histogram->tree_mtx);
-}
-
-static void
-_delete_bucket(struct dhist *histogram, struct bucket *bucket, int mp_flag) {
   struct bucket *attach, *lucky_bucket, *other;
   struct bucket *far_buckets[2];
   int dir_from_parent, dir, balance, idx;
@@ -1428,13 +1409,6 @@ _delete_bucket(struct dhist *histogram, struct bucket *bucket, int mp_flag) {
 
  restart:
   obtain_write_lock(bucket, mp_flag);
-  if (bucket->data->count >= histogram->delete_bucket_threshold ||
-      histogram->num_buckets == 1) {
-    // We raced and lost.
-    release_write_lock(bucket, mp_flag);
-    return;
-  }
-
   generation = get_next_generation(histogram, false, mp_flag);
 
   // Decide whether to merge the dying bucket above or below.
@@ -1577,10 +1551,12 @@ static void extract_info(
   if (mp_flag & DHIST_MULTI_THREADED)
     pthread_mutex_lock(histogram->tree_mtx);
 
-  // Allocate enough space for both the weights and the boundaries.
+  // Allocate enough space for both the weights and the boundaries. We can
+  // have one more than the target number of buckets for a short period of
+  // time, but we can't grow past that.
   info->weights = (double *)malloc(
-      sizeof(double) * 2 * histogram->max_num_buckets + 1);
-  info->boundaries = info->weights + histogram->max_num_buckets;
+      sizeof(double) * 2 * (histogram->target_num_buckets + 1) + 1);
+  info->boundaries = info->weights + histogram->target_num_buckets + 1;
 
   info->generation = get_next_generation(histogram, false, mp_flag);
 
