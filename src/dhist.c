@@ -108,12 +108,14 @@ static double ipow(double coefficient, uint64_t power);
 
 static struct bucket * bucket_init(int mp_flag);
 static void bucket_destroy(struct bucket *bucket);
+
 void thread_info_init_fields(
     struct dhist *histogram, struct thread_info *info, int mp_flag);
 static void thread_info_finalize(
     struct dhist *histogram, struct thread_info *info, int mp_flag);
 static void schedule_bucket_destruction(
     struct dhist *histogram, struct bucket *bucket, int mp_flag);
+
 static bool is_target_boundary(struct bucket *bucket, double observation);
 static int compute_balance(struct bucket *bucket);
 static void obtain_write_lock(struct bucket *bucket, int mp_flag);
@@ -630,6 +632,31 @@ bucket_destroy(struct bucket *bucket) {
   free(bucket);
 }
 
+// This trio of functions (along with thread_info_finalize and
+// schedule_bucket_destruction) allow the program to remove buckets from the
+// tree in a safe way. This is done by requiring that every thread register
+// itself as it enters dhist_insert and unregister itself when it leaves; if
+// it's the only thread that could have had a reference to a stale bucket, it
+// is then required to free that bucket. This requires two additional locked
+// regions.
+//
+// The time required to take the locks appears to be about 15% of the entire
+// execution time. However, removing this feature should provide a 30% speedup.
+// This disparity is likely due to cache misses, but that's only a hypothesis.
+//
+// If the unit of time is discrete (every dhist_insert increments the
+// generation counter), it would be preferable to create a pool of buckets
+// since the maximum number of buckets is known at initialization time.
+// However, this doesn't work if the unit of time is continuous.
+//
+// It's desirable to permit a continuous unit of time because it's possible to
+// get a consistent clock across several processors. This will make it possible
+// to create a dhist for each processor. Even if it's not possible to make
+// each of those be single threaded, doing this will eliminate many of the
+// cache misses.
+//
+// The process of merging multiple continuous time histograms together doesn't
+// lose much information, which makes this route desirable.
 void
 thread_info_init_fields(
     struct dhist *histogram, struct thread_info *info, int mp_flag) {
@@ -673,7 +700,7 @@ thread_info_finalize(
     }
     memo->prev = NULL;
     if (prior) {
-      prior->next == NULL;
+      prior->next = NULL;
     }
 
     post = info->next;
@@ -1398,7 +1425,6 @@ _delete_bucket(struct dhist *histogram, struct bucket *bucket, int mp_flag) {
   int dir_from_parent, dir, balance, idx;
   uint64_t generation;
   double below_count, above_count;
-  struct thread_info *info;
 
  restart:
   obtain_write_lock(bucket, mp_flag);
