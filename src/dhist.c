@@ -44,6 +44,8 @@
 #define MAX(x, y) ((x) > (y) ? (x) : (y))
 #endif
 
+#define PRECOMPUTED_POWERS_FACTOR 4
+
 
 // Interestingly, splitting bucket_data out from bucket provides a 4% speedup.
 // This is likely due to the data that rarely changes (pointers only change on
@@ -183,25 +185,15 @@ const int DHIST_MULTI_THREADED = 1 << 1;
 struct dhist *
 dhist_init(uint32_t target_buckets, double decay_rate) {
   struct dhist *histogram;
-  double max_count, expected_count;
   uint64_t idx;
   double radius;
 
   histogram = (struct dhist *)malloc(sizeof(struct dhist));
 
-  // If the count inside of a bucket is observed to be outside of these
-  // thresholds, split or delete the bucket.
-  // XXX(LPE): What are good thresholds?
-  radius = 0.8;
-  expected_count = MAX(
-      1.0 / ((1.0 - decay_rate) * target_buckets),  // Normal count.
-      1.0 / (1.0 - radius));  // Makes delete threshold greater than one.
-
   histogram->decay_rate = decay_rate;
+  // total_count should approach 1.0 / (1.0 - decay_rate) since it's a
+  // geometric series.
   histogram->total_count = 0.0;
-
-  // This comes from the sum of a geometric series.
-  max_count = 1.0 / (1.0 - decay_rate);
 
   histogram->target_num_buckets = target_buckets;
   histogram->fix_balance_stack = NULL;
@@ -212,8 +204,10 @@ dhist_init(uint32_t target_buckets, double decay_rate) {
   histogram->generation = 0;
   // The pow_table is a cache of the commonly used compound decay factors.
   histogram->pow_table = (double *)malloc(
-      2 * histogram->target_num_buckets * sizeof(double));
-  for (idx = 0; idx < 2 * histogram->target_num_buckets; idx++)
+      PRECOMPUTED_POWERS_FACTOR * histogram->target_num_buckets *
+      sizeof(double));
+  for (idx = 0;
+       idx < PRECOMPUTED_POWERS_FACTOR * histogram->target_num_buckets; idx++)
     histogram->pow_table[idx] = ipow(decay_rate, idx);
 
   histogram->thread_info_head = histogram->thread_info_tail = NULL;
@@ -233,6 +227,7 @@ dhist_init(uint32_t target_buckets, double decay_rate) {
 
 void dhist_destroy(struct dhist *histogram) {
   struct bucket *bucket, *memo;
+  struct thread_info *info, *info_next;
 
   // Select leftmost bucket.
   bucket = histogram->root;
@@ -243,6 +238,15 @@ void dhist_destroy(struct dhist *histogram) {
     memo = bucket;
     bucket = bucket->above;
     bucket_destroy(memo);
+  }
+
+  info = histogram->thread_info_head;
+  while (info) {
+    printf("here\n");
+    info_next = info->next;
+    free(info->bucket_to_free);
+    free(info);
+    info = info_next;
   }
 
   free(histogram->pow_table);
@@ -1037,13 +1041,17 @@ assert_invariant(struct bucket *root) {
 // bene updated in missed_generations updates.
 static double
 get_decay(struct dhist *histogram, uint64_t missed_generations) {
-  if (missed_generations < 2 * (uint32_t)histogram->target_num_buckets)
+  if (missed_generations <
+      PRECOMPUTED_POWERS_FACTOR * (uint32_t)histogram->target_num_buckets)
     return histogram->pow_table[missed_generations];
   else
     return ipow(histogram->decay_rate, missed_generations);
 }
 
 double split_threshold(struct dhist *histogram) {
+  //return
+  //    2 * (1.0 / (1.0 - histogram->decay_rate)) /
+  //    histogram->target_num_buckets;
   return 2 * (histogram->total_count / histogram->target_num_buckets);
 }
 
@@ -1330,11 +1338,15 @@ handle_bucket_split_and_delete(
     while (cursor->children[0])
       cursor = cursor->children[0];
 
-    min_bucket = cursor;
+    // XXX This process might interact badly with other threads... the repo of
+    // the issue is to spin up 30 threads and wait until deadlock (livelock?).
+    min_bucket = NULL;
     while (cursor) {
       if (cursor->data->is_enabled &&
-          cursor->data->count < min_bucket->data->count)
+          (min_bucket == NULL ||
+           cursor->data->count < min_bucket->data->count)) {
         min_bucket = cursor;
+      }
       cursor = cursor->above;
     }
 
