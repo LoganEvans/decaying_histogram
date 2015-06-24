@@ -241,7 +241,6 @@ void dhist_destroy(struct dhist *histogram) {
 
   info = histogram->thread_info_head;
   while (info) {
-    printf("here\n");
     info_next = info->next;
     free(info->bucket_to_free);
     free(info);
@@ -758,15 +757,6 @@ static void schedule_bucket_destruction(
   // Prepare and schedule bucket for destruction.
   bucket->data->is_enabled = false;
 
-  if (bucket->parent) {
-    assert(bucket->parent->children[0] != bucket);
-    assert(bucket->parent->children[1] != bucket);
-  }
-
-//dir_from_parent = (bucket->parent->children[1] == bucket);
-//set_child(bucket->parent, NULL, dir_from_parent);
-
-
   bucket->below = bucket->above = NULL;
   bucket->children[0] = bucket->children[1] = NULL;
   info = (struct thread_info *)malloc(sizeof(struct thread_info));
@@ -1079,16 +1069,13 @@ get_next_generation(
           1.0 + histogram->total_count * histogram->decay_rate;
     }
     generation = histogram->generation;
-    if (generation % 100000 == 0) {
-      printf("generation: %d\n", generation);
-    }
-    if (!increment) {
-      printf("generation: %d\n", generation);
-    }
     pthread_mutex_unlock(histogram->generation_mtx);
   } else {
-    if (increment)
+    if (increment) {
       ++histogram->generation;
+      histogram->total_count =
+          1.0 + histogram->total_count * histogram->decay_rate;
+    }
     generation = histogram->generation;
   }
 
@@ -1344,14 +1331,15 @@ handle_bucket_split_and_delete(
     struct dhist *histogram, struct bucket *bucket, int mp_flag) {
   struct bucket *cursor, *min_bucket;
 
-  if (mp_flag & DHIST_MULTI_THREADED)
+  if (mp_flag & DHIST_MULTI_THREADED) {
     pthread_mutex_lock(histogram->tree_mtx);
 
-  // Did we race?
-  if (bucket->data->is_enabled == false ||
-      bucket->data->count <= split_threshold(histogram)) {
-    pthread_mutex_unlock(histogram->tree_mtx);
-    return;
+    // Did we race?
+    if (bucket->data->is_enabled == false ||
+        bucket->data->count <= split_threshold(histogram)) {
+      pthread_mutex_unlock(histogram->tree_mtx);
+      return;
+    }
   }
 
   split_bucket(histogram, bucket, mp_flag);
@@ -1373,7 +1361,8 @@ handle_bucket_split_and_delete(
       cursor = cursor->above;
     }
 
-    delete_bucket(histogram, min_bucket, mp_flag);
+    if (min_bucket)
+      delete_bucket(histogram, min_bucket, mp_flag);
   }
 
   if (mp_flag & DHIST_MULTI_THREADED)
