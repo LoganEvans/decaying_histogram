@@ -55,7 +55,6 @@ struct dhist {
   pthread_mutex_t *thread_info_mtx;
   struct bucket *fix_balance_stack;
   struct thread_info *thread_info_head;
-  struct thread_info *thread_info_tail;
 };
 
 struct dhist * dhist_init(uint32_t target_buckets, double decay_rate);

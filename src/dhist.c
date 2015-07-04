@@ -209,7 +209,7 @@ dhist_init(uint32_t target_buckets, double decay_rate) {
        idx < PRECOMPUTED_POWERS_FACTOR * histogram->target_num_buckets; idx++)
     histogram->pow_table[idx] = ipow(decay_rate, idx);
 
-  histogram->thread_info_head = histogram->thread_info_tail = NULL;
+  histogram->thread_info_head = NULL;
 
   histogram->tree_mtx = (pthread_mutex_t *)malloc(sizeof(pthread_mutex_t));
   histogram->generation_mtx =
@@ -655,14 +655,9 @@ thread_info_init_fields(
   if (mp_flag & DHIST_MULTI_THREADED)
     pthread_mutex_lock(histogram->thread_info_mtx);
 
-  if (histogram->thread_info_tail == NULL) {
-    info->prev = NULL;
-    histogram->thread_info_head = histogram->thread_info_tail = info;
-  } else {
-    histogram->thread_info_tail->next = info;
-    info->prev = histogram->thread_info_tail;
-    histogram->thread_info_tail = info;
-  }
+  info->prev = NULL;
+  info->next = histogram->thread_info_head;
+  histogram->thread_info_head = info;
 
   if (mp_flag & DHIST_MULTI_THREADED)
     pthread_mutex_unlock(histogram->thread_info_mtx);
@@ -676,60 +671,29 @@ thread_info_finalize(
   if (mp_flag & DHIST_MULTI_THREADED)
     pthread_mutex_lock(histogram->thread_info_mtx);
 
-  if ((info->next == NULL || info->next->bucket_to_free) &&
-      (info->prev && info->prev->bucket_to_free)) {
-    // We have work to do.
-
-    // Find the element before our chain of work.
+  memo = info;
+  prior = memo->prev;
+  post = info->next;
+  if ((post == NULL || post->bucket_to_free) &&
+      (prior && prior->bucket_to_free)) {
+    // We have work to do. Identify the chain of work to remove from the list.
     memo = info;
-    prior = memo->prev;
     while (prior && prior->bucket_to_free) {
       memo = prior;
       prior = memo->prev;
     }
-    memo->prev = NULL;
-    if (prior) {
-      prior->next = NULL;
-    }
-
-    post = info->next;
-
-    if (histogram->thread_info_head == memo) {
-      histogram->thread_info_head = post;
-      if (histogram->thread_info_head) {
-        histogram->thread_info_head->prev = NULL;
-      }
-    }
-
-    if (histogram->thread_info_tail == info) {
-      histogram->thread_info_tail = prior;
-      if (histogram->thread_info_tail) {
-        histogram->thread_info_tail->next = NULL;
-      }
-    }
-  } else {
-    // We need to remove this thread_info node from the list, but that's all.
-    if (histogram->thread_info_head == info) {
-      histogram->thread_info_head = info->next;
-      if (histogram->thread_info_head) {
-        histogram->thread_info_head->prev = NULL;
-      }
-    }
-
-    if (histogram->thread_info_tail == info) {
-      histogram->thread_info_tail = info->prev;
-      if (histogram->thread_info_tail) {
-        histogram->thread_info_tail->next = NULL;
-      }
-    }
-
-    if (info->prev)
-      info->prev->next = info->next;
-    if (info->next)
-      info->next->prev = info->prev;
-
-    info->prev = NULL;
   }
+
+  if (histogram->thread_info_head == memo)
+    histogram->thread_info_head = post;
+
+  memo->prev = NULL;
+  if (prior)
+    prior->next = post;
+  if (post)
+    post->prev = prior;
+
+  info->prev = NULL;
 
   if (mp_flag & DHIST_MULTI_THREADED)
     pthread_mutex_unlock(histogram->thread_info_mtx);
