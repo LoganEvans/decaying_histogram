@@ -43,7 +43,7 @@ uint64_t NUM_BUCKETS = 30;
 double DECAY_RATE = 0.99999;
 uint64_t FRAMES_PER_SECOND = 5;
 
-uint64_t START_NUM_THREADS = 1;
+uint64_t START_NUM_THREADS = 3;
 uint64_t MAX_NUM_THREADS = 255;
 // 2.397 * 2**30 is roughly one second.
 uint64_t CYCLES_PER_TRIAL = 5ULL * 2.397 * 1024 * 1024 * 1024;
@@ -52,12 +52,12 @@ uint64_t PERMITTED_BYTES = 1ULL * 1024 * 1024 * 1024;
 bool CONSTANT_SPACE_PER_TRIAL[] = {false};
 
 uint64_t BYTES_PER_MALLOC[] = {
-  8ULL,  // tiny
-  512ULL,  // quantum-spaced
-  1024ULL,  // sub-page
+//8ULL,  // tiny
+//512ULL,  // quantum-spaced
+//1024ULL,  // sub-page
   4ULL * 1024,  // large
-  1ULL * 1024 * 1024,  // large
-  2ULL * 1024 * 1024,  // huge
+//1ULL * 1024 * 1024,  // large
+//2ULL * 1024 * 1024,  // huge
 };
 
 static struct dhist *g_histogram;
