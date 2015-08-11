@@ -657,6 +657,8 @@ thread_info_init_fields(
 
   info->prev = NULL;
   info->next = histogram->thread_info_head;
+  if (histogram->thread_info_head)
+    histogram->thread_info_head->prev = info;
   histogram->thread_info_head = info;
 
   if (mp_flag & DHIST_MULTI_THREADED)
@@ -672,13 +674,11 @@ thread_info_finalize(
     pthread_mutex_lock(histogram->thread_info_mtx);
 
   memo = info;
-  prior = memo->prev;
+  prior = info->prev;
   post = info->next;
-  if ((post == NULL || post->bucket_to_free) &&
-      (prior && prior->bucket_to_free)) {
-    // We have work to do. Identify the chain of work to remove from the list.
-    memo = info;
+  if (post == NULL) {
     while (prior && prior->bucket_to_free) {
+      // If we have work to do, pull out that chain.
       memo = prior;
       prior = memo->prev;
     }
@@ -692,8 +692,6 @@ thread_info_finalize(
     prior->next = post;
   if (post)
     post->prev = prior;
-
-  info->prev = NULL;
 
   if (mp_flag & DHIST_MULTI_THREADED)
     pthread_mutex_unlock(histogram->thread_info_mtx);
