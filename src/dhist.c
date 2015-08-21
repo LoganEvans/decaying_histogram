@@ -25,7 +25,6 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <assert.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -120,12 +119,8 @@ static void release_write_lock(struct bucket *bucket, int mp_flag);
 static void lock_boundary(struct bucket *bucket, int mp_flag);
 static bool trylock_boundary(struct bucket *bucket, int mp_flag);
 static void unlock_boundary(struct bucket *bucket, int mp_flag);
-static void _print_tree(struct bucket *bucket, int depth);
-static void print_tree(struct bucket *bucket);
 static void fix_height(struct bucket *bucket);
 static void set_child(struct bucket *root, struct bucket *child, int dir);
-static int count_buckets_in_tree(struct bucket *root);
-static int assert_invariant(struct bucket *root);
 
 static double split_threshold(struct dhist *histogram);
 static double get_decay(struct dhist *histogram, uint64_t missed_generations);
@@ -160,7 +155,6 @@ static void decay(
 static int snprint_histogram(
     char *s_buffer, size_t n, struct dhist_info *info, const char *title,
     const char *xlabel);
-static void assert_consistent(struct dhist *histogram);
 
 static void extract_info(
     struct dhist *histogram, int mp_flag, struct dhist_info *info);
@@ -848,34 +842,6 @@ unlock_boundary(struct bucket *bucket, int mp_flag) {
   }
 }
 
-// Debugging.
-static void
-_print_tree(struct bucket *bucket, int depth) {
-  int i;
-
-  printf("%.2lf", bucket->data->mu);
-
-  if (bucket->children[0]) {
-    printf("\t  ");
-    _print_tree(bucket->children[0], depth + 1);
-  }
-
-  if (bucket->children[1]) {
-    printf("\n");
-    for (i = 0; i < depth; i++)
-      printf("\t");
-    printf("\t\\ ");
-    _print_tree(bucket->children[1], depth + 1);
-  }
-}
-
-// Debugging.
-static void
-print_tree(struct bucket *bucket) {
-  _print_tree(bucket, 0);
-  printf("\n");
-}
-
 // Rebalances this node in the AVL tree.
 static void
 fix_height(struct bucket *bucket) {
@@ -909,94 +875,6 @@ set_child(struct bucket *root, struct bucket *child, int dir) {
   if (child != NULL)
     child->parent = root;
   fix_height(root);
-}
-
-static int
-count_buckets_in_tree(struct bucket *root) {
-  if (root) {
-    return 1 +
-        count_buckets_in_tree(root->children[0]) +
-        count_buckets_in_tree(root->children[1]);
-  } else {
-    return 0;
-  }
-}
-
-// Debugging. Make sure that the tree is properly balanced.
-static int
-assert_invariant(struct bucket *root) {
-  int left, right, dir;
-
-  if (root == NULL) {
-    return 0;
-  } else if (root->children[0] == NULL && root->children[1] == NULL) {
-    if (root->data->height != 1) {
-      print_tree(root);
-      assert(root->data->height == 1);
-    }
-    return 1;
-  } else {
-    if (root->children[0] && root->data->mu < root->children[0]->data->mu) {
-      printf("ORDER ERROR(0): root->data->mu: %lf "
-             "< root->children[0]->data->mu: %lf ...\n",
-          root->data->mu, root->children[0]->data->mu);
-      assert(false);
-    }
-
-    if (root->children[1] && root->data->mu > root->children[1]->data->mu) {
-      printf("ORDER ERROR(1): root->data->mu: %lf "
-             "> root->children[1]->data->mu: %lf ...\n",
-          root->data->mu, root->children[1]->data->mu);
-      assert(false);
-    }
-
-    left = assert_invariant(root->children[0]);
-    if (root->children[0] == NULL && left != 0) {
-      printf("ERROR(1): root->children[0] == NULL && left(%d) != 0\n", left);
-      assert(false);
-    } else if (root->children[0] &&
-               (root->children[0]->data->height != left)) {
-      printf("ERROR(2): root->children[0]->hieght(%d) != left(%d)\n",
-          root->children[0]->data->height, left);
-      assert(false);
-    }
-
-    right = assert_invariant(root->children[1]);
-    if (root->children[1] == NULL && right != 0) {
-      printf("ERROR(3): root->children[1] == NULL && right(%d) != 0\n", right);
-      assert(false);
-    } else if (root->children[1] &&
-               (root->children[1]->data->height != right)) {
-      printf("ERROR(4): root->children[1]->hieght(%d) != right(%d)\n",
-          root->children[1]->data->height, right);
-      assert(false);
-    }
-
-    if (root == root->children[0] || root == root->children[1]) {
-      printf("root == a child\n");
-      assert(false);
-    }
-
-    for (dir = 0; dir <= 1; dir++) {
-      if (root->children[dir] && root->children[dir]->parent != root) {
-        assert(false);
-      }
-    }
-
-    if ((root->data->height != left + 1 && root->data->height != right + 1) ||
-        (root->data->height <= left || root->data->height <= right)) {
-      printf(
-        "root height is not correct. heights -- root: %d left: %d right: %d\n",
-        root->data->height, left, right);
-      assert(false);
-    }
-
-    if (ABS(right - left) > 1) {
-      assert(false);
-    }
-
-    return 1 + (left > right ? left : right);
-  }
 }
 
 // Calculate the decay factor that should be applied to a count that hasn't
@@ -1436,6 +1314,8 @@ delete_bucket(struct dhist *histogram, struct bucket *bucket, int mp_flag) {
   }
 
   // Update the lucky bucket data.
+  decay(histogram, bucket, generation);
+  decay(histogram, lucky_bucket, generation);
   lucky_bucket->data->mu =
       (lucky_bucket->data->mu * lucky_bucket->data->count +
        bucket->data->mu * bucket->data->count) /
@@ -1671,78 +1551,6 @@ snprint_histogram(
   return num_chars;
 }
 
-// Debugging. Run a bunch of sanity checks.
-static void
-assert_consistent(struct dhist *histogram) {
-  uint32_t num_buckets_seen = 0;
-  double upper_bound, lower_bound;
-  struct bucket *cursor = histogram->root, *cursor_two;
-  while (cursor->children[0])
-    cursor = cursor->children[0];
-
-  while (cursor != NULL) {
-    num_buckets_seen++;
-    upper_bound = compute_bound(histogram, cursor, cursor->above);
-    lower_bound = compute_bound(histogram, cursor->below, cursor);
-    if (cursor->above && cursor->data->mu > cursor->above->data->mu) {
-      printf("ERROR: cursor->data->mu(%lf) > cursor->above->data->mu(%lf)\n",
-          cursor->data->mu, cursor->above->data->mu);
-      print_tree(histogram->root);
-      assert(0);
-    }
-    if (upper_bound < lower_bound) {
-      printf("ERROR: upper_bound(%lf) < lower_bound(%lf)\n",
-          upper_bound, lower_bound);
-      print_tree(histogram->root);
-      assert(0);
-    }
-
-    if (cursor->above) {
-      assert(cursor->above->below == cursor);
-    }
-
-    if (cursor->below) {
-      assert(cursor->below->above == cursor);
-    }
-
-    if (cursor->children[0]) {
-      assert(cursor->children[0]->parent == cursor);
-      assert(cursor->below);
-      assert(cursor->below->data->mu <= cursor->data->mu);
-    }
-
-    if (cursor->children[1]) {
-      assert(cursor->children[1]->parent == cursor);
-      assert(cursor->above);
-      assert(cursor->data->mu <= cursor->above->data->mu);
-    }
-
-    // Make sure we can find this bucket in the tree.
-    cursor_two = histogram->root;
-    while (true) {
-      if (cursor_two == NULL) {
-        printf("Could not find bucket with mu %lf in the tree.\n",
-            cursor->data->mu);
-        assert(false);
-      } else if (cursor_two->data->mu == cursor->data->mu) {
-        break;
-      } else if (cursor->data->mu < cursor_two->data->mu) {
-        cursor_two = cursor_two->children[0];
-      } else {
-        cursor_two = cursor_two->children[1];
-      }
-    }
-
-    cursor = cursor->above;
-  }
-
-  assert(num_buckets_seen == histogram->num_buckets);
-  assert(
-      (uint64_t)count_buckets_in_tree(histogram->root) ==
-      histogram->num_buckets);
-  assert_invariant(histogram->root);
-}
-
 // Identify the boundaries that are observed by one or both of the histograms.
 // Note: This does NOT initialize the weights, although it does reserve
 // enough space that the weights can be calculated later.
@@ -1912,17 +1720,6 @@ static void compute_CDF_no_intersections(
     CDF_out[FG]->num_boundaries = out_idx + 2;
     CDF_out[FG]->CDF[out_idx] = CDF_in[FG]->CDF[idx];
     CDF_out[FG]->boundaries[out_idx] = CDF_in[FG]->CDF[idx + 1];
-  }
-
-  for (FG = 0; FG <= 1; FG++) {
-    for (idx = 0; idx < CDF_out[FG]->num_buckets - 1; idx++) {
-      if (CDF_out[FG]->CDF[idx] > CDF_out[FG]->CDF[idx + 1]) {
-        for (idx = 0; idx < CDF_out[FG]->num_buckets - 1; idx++) {
-          printf("CDF[%d] = %lf\n", idx, CDF_out[FG]->CDF[idx]);
-        }
-        assert(false);
-      }
-    }
   }
 }
 

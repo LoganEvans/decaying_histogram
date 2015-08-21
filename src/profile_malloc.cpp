@@ -28,39 +28,23 @@
 
 #include <assert.h>
 #include <math.h>
+#include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <pthread.h>
+#include <unistd.h>
+#include <sys/types.h>
+
+#include <atomic>
 #include <random>
+
 #include "dhist.h"
 
 #define SUCCESS 9001
-#define FAILURE 9000
-#define ANIMATE 1
-#define PROFILE_FREE 0
-
-uint64_t NUM_BUCKETS = 30;
-double DECAY_RATE = 0.99999;
-uint64_t FRAMES_PER_SECOND = 5;
-
-uint64_t START_NUM_THREADS = 3;
-uint64_t MAX_NUM_THREADS = 255;
-// 2.397 * 2**30 is roughly one second.
-uint64_t CYCLES_PER_TRIAL = 5ULL * 2.397 * 1024 * 1024 * 1024;
-uint64_t PERMITTED_BYTES = 1ULL * 1024 * 1024 * 1024;
-
-bool CONSTANT_SPACE_PER_TRIAL[] = {false};
-
-uint64_t BYTES_PER_MALLOC[] = {
-//8ULL,  // tiny
-//512ULL,  // quantum-spaced
-//1024ULL,  // sub-page
-  4ULL * 1024,  // large
-//1ULL * 1024 * 1024,  // large
-//2ULL * 1024 * 1024,  // huge
-};
 
 static struct dhist *g_histogram;
+static std::atomic<char *> *g_buffer;
+static uint64_t g_buffer_len;
 
 static uint64_t rdtsc()
 {
@@ -73,165 +57,279 @@ static uint64_t rdtsc()
 struct thread_func_args {
   uint64_t end_timestamp;
   uint64_t bytes_per_malloc;
-  uint64_t bytes_per_thread;
   uint64_t num_mallocs_out;
   uint64_t total_cycles_out;
+  bool profile_free;
+  uint8_t __padding[7];
 };
+
+static void
+bytes_to_display(uint64_t bytes, char *buffer) {
+  if (bytes >= 1024 * 1024 * 1024) {
+    sprintf(buffer, "%.3lfGiB", bytes / (1024 * 1024 * 1024.0));
+  } else if (bytes >= 1024 * 1024) {
+    sprintf(buffer, "%.3lfMiB", bytes / (1024 * 1024.0));
+  } else if (bytes >= 1024) {
+    sprintf(buffer, "%.3lfKiB", bytes / (1024.0));
+  } else {
+    sprintf(buffer, "%dB", bytes);
+  }
+}
 
 static void *
 thread_func(void *args) {
   uint64_t start_timestamp, stop_timestamp, end_timestamp;
   uint64_t bytes_per_malloc;
-  uint64_t bytes_per_thread;
   uint64_t num_mallocs_out;
   uint64_t total_cycles_out;
-  char **buffer;
-  int buffer_size;
-  int idx;
+  bool profile_free;
   int malloc_idx;
-  std::default_random_engine generator;
   std::uniform_int_distribution<int> *distribution;
+  std::default_random_engine *generator;
+  char *pointer;
 
+  start_timestamp = stop_timestamp = 0;
   end_timestamp = ((struct thread_func_args *)args)->end_timestamp;
-  bytes_per_thread = ((struct thread_func_args *)args)->bytes_per_thread;
   bytes_per_malloc = ((struct thread_func_args *)args)->bytes_per_malloc;
+  profile_free = ((struct thread_func_args *)args)->profile_free;
   num_mallocs_out = 0;
   total_cycles_out = 0;
 
-  buffer_size = bytes_per_thread / bytes_per_malloc;
+  distribution =
+      new std::uniform_int_distribution<int>(0, (int)(g_buffer_len - 1));
+  generator = new std::default_random_engine((int)pthread_self());
 
-  distribution = new std::uniform_int_distribution<int>(0, buffer_size - 1);
+  while (end_timestamp == 0 || rdtsc() < end_timestamp) {
+    malloc_idx = (*distribution)(*generator);
 
-  buffer = (char **)malloc(sizeof(char*) * buffer_size);
-  for (idx = 0; idx < buffer_size; idx++) {
-    buffer[idx] = NULL;
-  }
-
-  while (rdtsc() < end_timestamp) {
-    malloc_idx = (*distribution)(generator);
-    if (buffer[malloc_idx] == NULL) {
+    pointer = g_buffer[malloc_idx].exchange((char *)g_buffer);
+    if (pointer == NULL) {
+      // Nothing was here, so malloc and set.
       start_timestamp = rdtsc();
-      buffer[malloc_idx] = (char *)malloc(bytes_per_malloc);
+      g_buffer[malloc_idx].store((char *)malloc(bytes_per_malloc));
       stop_timestamp = rdtsc();
-#if ANIMATE && !PROFILE_FREE
-      dhist_insert(
-          g_histogram, log2(stop_timestamp - start_timestamp),
-          DHIST_MULTI_THREADED);
-#endif  // ANIMATE
+      if (g_histogram && !profile_free) {
+        dhist_insert(
+            g_histogram, log2(stop_timestamp - start_timestamp),
+            DHIST_MULTI_THREADED);
+      }
       num_mallocs_out++;
       total_cycles_out += stop_timestamp - start_timestamp;
+    } else if (pointer == (char *)g_buffer) {
+      // Some other thread was working on this item, so find some other index.
+      continue;
     } else {
-      start_timestamp = rdtsc();
-      free(buffer[malloc_idx]);
-      stop_timestamp = rdtsc();
-      buffer[malloc_idx] = NULL;
+      // A pointer was here, so free it.
+      if (profile_free)
+        start_timestamp = rdtsc();
+      free(pointer);
+      if (profile_free)
+        stop_timestamp = rdtsc();
+      g_buffer[malloc_idx].store(NULL);
 
-#if ANIMATE && PROFILE_FREE
-      dhist_insert(
-          g_histogram, log2(stop_timestamp - start_timestamp),
-          DHIST_MULTI_THREADED);
-#endif
+      if (profile_free) {
+        dhist_insert(
+            g_histogram, log2(stop_timestamp - start_timestamp),
+            DHIST_MULTI_THREADED);
+      }
     }
-  }
-
-  for (idx = 0; idx < buffer_size; idx++) {
-    free(buffer[idx]);
   }
 
   ((struct thread_func_args *)args)->num_mallocs_out = num_mallocs_out;
   ((struct thread_func_args *)args)->total_cycles_out = total_cycles_out;
 
   delete distribution;
-  free(buffer);
+  delete generator;
   return (void *)SUCCESS;
 }
 
-int main() {
-  pthread_t threads[MAX_NUM_THREADS];
-  struct thread_func_args args[MAX_NUM_THREADS];
+int main(int argc, char **argv) {
+  pthread_t *threads;
+  struct thread_func_args *args;
   struct timespec tim, tim2;
   char title[1000];
+  char bytes_per_malloc_display[100];
+  char num_bytes_display[100];
   char *histogram_json;
   uint64_t end_timestamp;
-  uint64_t bytes_per_malloc;
-  uint64_t bytes_per_thread;
   uint64_t num_mallocs;
   uint64_t total_cycles;
   void *status;
-  bool constant_space_per_trial;
 
-  g_histogram = dhist_init(NUM_BUCKETS, DECAY_RATE);
-  tim.tv_sec = 0;
-  tim.tv_nsec = 1000000000 / FRAMES_PER_SECOND;
+  char ch;
+  extern char *optarg;
+  char optarg_copy[100];
+  size_t len;
+  double bytes;  // Units unknown.
 
-#if !ANIMATE
-  printf(
-      "threads,cycles_per_malloc,num_mallocs,"
-      "bytes_per_malloc,bytes_per_thread,constant_space_per_trial\n");
-#endif
+  uint16_t opt_t_num_threads = 1;
+  uint64_t opt_b_num_bytes = 1UL * 1024 * 1024 * 1024;
+  uint32_t opt_m_bytes_per_malloc = 1024 * 1024;
+  uint16_t opt_h_num_histogram_buckets = 0;
+  double opt_d_decay_rate = 0.99999;
+  double opt_s_seconds = 2.0;
+  double opt_p_fps = 10.0;
+  bool opt_f_profile_free = false;
+  bool opt_a_animate = false;
 
-  for (int space_idx = 0;
-      space_idx < sizeof(CONSTANT_SPACE_PER_TRIAL) /
-                  sizeof(CONSTANT_SPACE_PER_TRIAL[0]);
-      space_idx++) {
-    constant_space_per_trial = CONSTANT_SPACE_PER_TRIAL[space_idx];
-    for (int bytes_idx = 0;
-         bytes_idx < sizeof(BYTES_PER_MALLOC) / sizeof(BYTES_PER_MALLOC[0]);
-         bytes_idx++) {
-      bytes_per_malloc = BYTES_PER_MALLOC[bytes_idx];
+  while ((ch = (char)getopt(argc, argv, "t:b:m:h:d:s:p:f:a")) != -1) {
+    switch (ch) {
+    case 't':
+      // Number of threads.
+      opt_t_num_threads = (uint16_t)strtoul(optarg, NULL, 10);
+      break;
+    case 'b':
+      // Permitted number of bytes, shared among all threads.
+      opt_b_num_bytes = strtoull(optarg, NULL, 10);
+      break;
+    case 'm':
+      // malloc size in bytes.
 
-      for (int num_threads = START_NUM_THREADS;
-           num_threads < MAX_NUM_THREADS; num_threads++) {
-        sprintf(title,
-            "threads: %d, bytes-per-malloc: %lu, bytes-per-thread: %lu",
-            num_threads, bytes_per_malloc, bytes_per_thread);
-        end_timestamp = rdtsc() + CYCLES_PER_TRIAL;
-        if (constant_space_per_trial)
-          bytes_per_thread = PERMITTED_BYTES / num_threads;
-        else
-          bytes_per_thread = PERMITTED_BYTES / MAX_NUM_THREADS;
-
-        for (int i = 0; i < num_threads; i++) {
-          args[i].end_timestamp = end_timestamp;
-          args[i].bytes_per_thread = bytes_per_thread;
-          args[i].bytes_per_malloc = bytes_per_malloc;
-          pthread_create(
-            &threads[i], NULL, (void *(*)(void *))thread_func, &args[i]);
+      len = strlen(optarg);
+      if (len <= strlen("..")) {
+        opt_m_bytes_per_malloc = (uint32_t)strtoul(optarg, NULL, 10);
+      } else {
+        strncpy(optarg_copy, optarg, sizeof(optarg_copy));
+        if (strcmp(optarg + len - strlen("GiB"), "GiB") == 0) {
+          optarg_copy[len - strlen("GiB")] = '\0';
+          bytes = strtod(optarg_copy, NULL);
+          opt_m_bytes_per_malloc = (uint32_t)(bytes * 1024 * 1024 * 1024UL);
+        } else if (strcmp(optarg + len - strlen("MiB"), "MiB") == 0) {
+          optarg_copy[len - strlen("MiB")] = '\0';
+          bytes = strtod(optarg_copy, NULL);
+          opt_m_bytes_per_malloc = (uint32_t)(bytes * 1024 * 1024UL);
+        } else if (strcmp(optarg + len - strlen("KiB"), "KiB") == 0) {
+          optarg_copy[len - strlen("KiB")] = '\0';
+          bytes = strtod(optarg_copy, NULL);
+          opt_m_bytes_per_malloc = (uint32_t)(bytes * 1024UL);
+        } else {
+          opt_m_bytes_per_malloc = (uint32_t)strtoul(optarg, NULL, 10);
         }
-
-#if ANIMATE
-        while (rdtsc() < end_timestamp) {
-          nanosleep(&tim , &tim2);
-          histogram_json = dhist_get_json(
-              g_histogram, title, "log_2(insertion time)",
-              DHIST_MULTI_THREADED);
-          puts(histogram_json);
-          free(histogram_json);
-          fflush(stdout);
-        }
-#endif
-
-        num_mallocs = 0;
-        total_cycles = 0;
-        for (int i = 0; i < num_threads; i++) {
-          pthread_join(threads[i], &status);
-          if ((uint64_t)status != SUCCESS) {
-            printf("Thread %d returned status: %lu\n", i, (uint64_t)status);
-            assert(false);
-          }
-          num_mallocs += args[i].num_mallocs_out;
-          total_cycles += args[i].total_cycles_out;
-        }
-#if !ANIMATE
-        printf("%d,%lu,%lu,%lu,%lu,%d\n",
-            num_threads, total_cycles / num_mallocs, num_mallocs,
-            bytes_per_malloc, bytes_per_thread, constant_space_per_trial);
-#endif
       }
+      break;
+    case 'h':
+      // If present, use a decaying histogram with the specified number of
+      // buckets.
+      opt_h_num_histogram_buckets = (uint16_t)strtoul(optarg, NULL, 10);
+      break;
+    case 'd':
+      // Decay rate for the decaying histogram.
+      opt_d_decay_rate = strtod(optarg, NULL);
+      break;
+    case 's':
+      // Rough number of seconds (based on a 2.3 GHz cpu).
+      opt_s_seconds = strtod(optarg, NULL);
+      break;
+    case 'p':
+      // FPS.
+      opt_p_fps = strtod(optarg, NULL);
+      break;
+    case 'f':
+      // Profile free instead of malloc.
+      opt_f_profile_free = true;
+      break;
+    case 'a':
+      // Animate. If this is present, -s is ignored.
+      opt_a_animate = true;
+      break;
+    default:
+      break;
     }
   }
 
-  dhist_destroy(g_histogram);
+  if (!opt_h_num_histogram_buckets && (opt_a_animate || opt_f_profile_free)) {
+    fprintf(stderr, "ERROR: -a and -f options depend on -h\n");
+    assert(false);
+  }
+
+  if (opt_h_num_histogram_buckets)
+    g_histogram = dhist_init(opt_h_num_histogram_buckets, opt_d_decay_rate);
+  else
+    g_histogram = NULL;
+
+  if (!g_histogram)
+      printf("threads,cycles_per_malloc,num_mallocs,bytes_per_malloc\n");
+
+  if (opt_h_num_histogram_buckets) {
+    bytes_to_display(opt_m_bytes_per_malloc, bytes_per_malloc_display);
+    bytes_to_display(opt_b_num_bytes, num_bytes_display);
+
+    sprintf(title,
+        "threads: %d, size-per-malloc: %s, bytes-permitted: %s",
+        opt_t_num_threads, bytes_per_malloc_display, num_bytes_display);
+  }
+
+  g_buffer_len = opt_b_num_bytes / opt_m_bytes_per_malloc;
+  g_buffer = (std::atomic<char *>*)malloc(
+      sizeof(std::atomic<char *>) * g_buffer_len);
+  for (uint64_t idx = 0; idx < g_buffer_len; idx++)
+    g_buffer[idx].store(NULL);
+
+  threads = (pthread_t *)malloc(sizeof(pthread_t) * opt_t_num_threads);
+  args = (struct thread_func_args *)malloc(
+      sizeof(struct thread_func_args) * opt_t_num_threads);
+  if (opt_a_animate) {
+    end_timestamp = 0;
+  } else {
+    end_timestamp =
+        rdtsc() + (uint64_t)(opt_s_seconds * 2.3 * 1024 * 1024 * 1024);
+  }
+
+  for (int i = 0; i < opt_t_num_threads; i++) {
+    args[i].end_timestamp = end_timestamp;
+    args[i].bytes_per_malloc = opt_m_bytes_per_malloc;
+    args[i].profile_free = opt_f_profile_free;
+    pthread_create(
+        &threads[i], NULL, (void *(*)(void *))thread_func, &args[i]);
+  }
+
+  if (opt_a_animate) {
+    tim.tv_sec = (int)(1.0 / opt_p_fps);
+    tim.tv_nsec = (int)(1000000000 * (1.0 / opt_p_fps - tim.tv_sec));
+
+    while (1) {
+      nanosleep(&tim, &tim2);
+      histogram_json = dhist_get_json(
+          g_histogram, title, "log_2(insertion time)",
+          DHIST_MULTI_THREADED);
+      puts(histogram_json);
+      free(histogram_json);
+      fflush(stdout);
+    }
+  }
+
+  num_mallocs = 0;
+  total_cycles = 0;
+  for (int i = 0; i < opt_t_num_threads; i++) {
+    pthread_join(threads[i], &status);
+    if ((uint64_t)status != SUCCESS) {
+      printf("Thread %d returned status: %lu\n", i, (uint64_t)status);
+      assert(false);
+    }
+    num_mallocs += args[i].num_mallocs_out;
+    total_cycles += args[i].total_cycles_out;
+  }
+
+  free(threads);
+  free(args);
+  for (uint64_t idx = 0; idx < g_buffer_len; idx++)
+    free(g_buffer[idx].load());
+  free(g_buffer);
+
+  if (g_histogram) {
+    if (!opt_a_animate) {
+      histogram_json = dhist_get_json(
+          g_histogram, title, "log_2(insertion time)",
+          DHIST_MULTI_THREADED);
+      puts(histogram_json);
+      free(histogram_json);
+    }
+    dhist_destroy(g_histogram);
+  } else {
+    printf("%d,%lu,%lu,%u,%lu\n",
+        opt_t_num_threads, total_cycles / num_mallocs, num_mallocs,
+        opt_m_bytes_per_malloc, opt_b_num_bytes / opt_t_num_threads);
+  }
 
   return 0;
 }

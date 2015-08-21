@@ -33,16 +33,16 @@
 #include <random>
 
 #define NUM_BUCKETS 50
-#define NUM_THREADS 4
+#define NUM_THREADS 1
 #define DECAY_RATE 0.999999
 
 // 2.397 * 1024 * 1024 * 1024 is roughly the number of cycles in a second.
-#define CYCLES ((uint64_t)(10 * 2.397 * 1024 * 1024 * 1024))
+#define CYCLES ((uint64_t)(2 * 2.397 * 1024 * 1024 * 1024))
 #define DHIST_MP_FLAG \
     (NUM_THREADS > 1 ? DHIST_MULTI_THREADED : DHIST_SINGLE_THREADED)
 #define FRAMES_PER_SECOND 5.01
 
-#define ANIMATE 1
+#define ANIMATE 2
 #define NORMAL_DISTRIBUTION 0
 
 static struct dhist *g_histogram;
@@ -97,7 +97,7 @@ int main() {
 
   json_len = 0;
   tim.tv_sec = 0;
-  tim.tv_nsec = 1000000000 / FRAMES_PER_SECOND;
+  tim.tv_nsec = static_cast<uint64_t>(1000000000 / FRAMES_PER_SECOND);
 
   args.stop_timestamp = rdtsc() + CYCLES;
 
@@ -111,11 +111,13 @@ int main() {
   while (1) {
     nanosleep(&tim , &tim2);
     while (1) {
-      needed_len = dhist_snprint_histogram(histogram_json, json_len,
-          g_histogram, "Test", "log_2(insertion time)", DHIST_MP_FLAG);
+      needed_len = dhist_snprint_histogram(histogram_json,
+          static_cast<size_t>(json_len), g_histogram, "Test",
+          "log_2(insertion time)", DHIST_MP_FLAG);
       if (needed_len >= json_len) {
         json_len = needed_len * 2 + 1;
-        histogram_json = (char *)realloc(histogram_json, json_len);
+        histogram_json = static_cast<char *>(
+            realloc(histogram_json, static_cast<size_t>(json_len)));
       } else {
         break;
       }
