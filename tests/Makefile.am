@@ -9,7 +9,5 @@ AM_LDFLAGS = $(GTEST_LDFLAGS) $(GTEST_LIBS) \
 TESTS =
 check_PROGRAMS =
 
-TESTS += decaying_histogram_test
-check_PROGRAMS += decaying_histogram_test
-decaying_histogram_test_SOURCES = decaying_histogram_test.cpp
-decaying_histogram_test_LDADD = $(top_srcdir)/src/decaying_histogram.o
+check_PROGRAMS += test_dhist
+test_dhist_SOURCES = test_dhist.cpp

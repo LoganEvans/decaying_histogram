@@ -299,8 +299,6 @@ void dhist_insert(
     } else {
       // No bucket exists to the right, and since we already have the boundary
       // mutex for this bucket, nothing else can add a bucket to the right.
-
-      // XXX split and delete_bucket should lock far left and far right buckets
       add_succeeded = perform_add(
           histogram, bucket, observation, false, false, mp_flag);
     }
@@ -1189,7 +1187,7 @@ handle_bucket_split_and_delete(
     while (cursor->children[0])
       cursor = cursor->children[0];
 
-    // XXX This process might interact badly with other threads... the repo of
+    // XXX This process might interact badly with other threads... the repro of
     // the issue is to spin up 30 threads and wait until deadlock (livelock?).
     min_bucket = NULL;
     while (cursor) {

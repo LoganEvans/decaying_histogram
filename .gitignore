@@ -99,8 +99,12 @@ Makefile.in
 .deps/
 .dirstamp
 *.o
+*.swp
+*.swo
 *~
 src/main
-tests/decaying_histogram_test
-tests/decaying_histogram_test.trs
+src/distance_comparison
+src/profile_malloc
+tests/test_dhist
+tests/test_dhist.trs
 

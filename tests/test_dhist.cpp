@@ -25,6 +25,7 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include <stdio.h>
 #include <iostream>
 #include <random>
 
@@ -314,5 +315,56 @@ TEST_F(HistogramTest, TotalCount) {
       1.0 + decay_rate_ * (1.0 - ipow(decay_rate_, iterations - 1)) /
         (1.0 - decay_rate_),
       1e-10);
+}
+
+TEST_F(HistogramTest, InsertConstant) {
+  // This should not freeze if a constant value is inserted.
+  for (int idx = 0; idx < 100000; idx++)
+    dhist_insert(histogram_, 1, DHIST_SINGLE_THREADED);
+
+  // We can also stress it a bit by first making sure several buckets exist.
+  for (int idx = 0; idx < 100000; idx++)
+    dhist_insert(histogram_, normal_(generator_), DHIST_SINGLE_THREADED);
+  for (int idx = 0; idx < 100000; idx++)
+    dhist_insert(histogram_, 1, DHIST_SINGLE_THREADED);
+
+  // Let's also be obnoxious and use a painfully quick decay rate.
+  dhist_destroy(histogram_);
+  histogram_ = dhist_init(50, 0.9);
+  for (int idx = 0; idx < 10000; idx++)
+    dhist_insert(histogram_, normal_(generator_), DHIST_SINGLE_THREADED);
+  for (int idx = 0; idx < 10000; idx++)
+    dhist_insert(histogram_, 1, DHIST_SINGLE_THREADED);
+}
+
+TEST_F(HistogramTest, Trace1) {
+  char buffer[100];
+  int buffer_idx = 0;
+  FILE *fin;
+  char ch;
+
+  fin = fopen("trace1.txt", "r");
+  if (!fin)
+    fin = fopen("tests/trace1.txt", "r");
+  ASSERT_TRUE(fin);
+
+  dhist_destroy(histogram_);
+  histogram_ = dhist_init(20, 0.9);
+
+  do {
+    ch = static_cast<char>(fgetc(fin));
+    if (ch == EOF || ch == ',') {
+      buffer[buffer_idx] = '\0';
+      if (buffer_idx > 0)
+        dhist_insert(histogram_, atoi(buffer), DHIST_SINGLE_THREADED);
+      assert_consistent(histogram_);
+      buffer_idx = 0;
+    } else {
+      buffer[buffer_idx] = ch;
+      buffer_idx++;
+    }
+  } while (ch != EOF);
+
+  fclose(fin);
 }
 
