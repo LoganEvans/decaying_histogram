@@ -1215,7 +1215,7 @@ handle_bucket_split_and_delete(
 
 static void
 split_bucket(struct dhist *histogram, struct bucket *bucket, int mp_flag) {
-  double lower_bound, upper_bound, diameter, median;
+  double lower_bound, upper_bound;
   struct bucket *new_bucket, *memo;
 
   obtain_write_lock(bucket, mp_flag);
@@ -1245,18 +1245,8 @@ split_bucket(struct dhist *histogram, struct bucket *bucket, int mp_flag) {
     } else {
       lower_bound = compute_bound(histogram, new_bucket->below, bucket);
     }
-    diameter = upper_bound - lower_bound;
-    // XXX Why median? mu is guaranteed to be in the interval, so why not use
-    // it?
-    median = lower_bound + diameter / 2.0;
-    new_bucket->data->mu = median - diameter / 6.0;
-    bucket->data->mu = median + diameter / 6.0;
-    //printf("... %.11lf %.11lf %.11lf\n", new_bucket->data->mu, median, bucket->data->mu);
-    //printf("??? %.11lf %.11lf\n", lower_bound, upper_bound);
-    //printf("!!! %.11lf %.11lf %d %.11lf %.11lf %d\n",
-    //    bucket->below->data->mu, bucket->below->data->count, bucket->below->data->update_generation,
-    //    bucket->data->mu, bucket->data->count, bucket->data->update_generation);
-    //printf("<<< %.11lf %.11lf\n", compute_bound(histogram, bucket->below->below, bucket->below), compute_bound(histogram, bucket->below, bucket));
+    new_bucket->data->mu = (lower_bound + bucket->data->mu) / 2.0;
+    bucket->data->mu = (bucket->data->mu + upper_bound) / 2.0;
   }
   release_write_lock(bucket, mp_flag);
 
