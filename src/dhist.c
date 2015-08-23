@@ -144,8 +144,9 @@ static struct bucket * rotate_single(
     struct dhist *histogram, struct bucket *root, int dir);
 static struct bucket * rotate_double(
     struct dhist *histogram, struct bucket *root, int dir);
-static void handle_bucket_split_and_delete(
+static void handle_bucket_split_and_deletes(
     struct dhist *histogram, struct bucket *bucket, int mp_flag);
+static void handle_bucket_deletes(struct dhist *histogram, int mp_flag);
 static void split_bucket(
     struct dhist *histogram, struct bucket *bucket, int mp_flag);
 static void delete_bucket(
@@ -309,7 +310,7 @@ void dhist_insert(
   } while (!add_succeeded);
 
   if (bucket->data->count > split_threshold(histogram))
-    handle_bucket_split_and_delete(histogram, bucket, mp_flag);
+    handle_bucket_split_and_deletes(histogram, bucket, mp_flag);
 
   thread_info_finalize(histogram, &info, mp_flag);
 }
@@ -333,8 +334,7 @@ char * dhist_get_json(
 
 // The caller is expected to manage the memory associated with s_buffer. The
 // return value is one fewer than the number of bytes needed to write the data.
-int
-dhist_snprint_histogram(
+int dhist_snprint_histogram(
     char *s_buffer, size_t n, struct dhist *histogram, const char *title,
     const char *xlabel, int mp_flag) {
   struct dhist_info info;
@@ -343,6 +343,46 @@ dhist_snprint_histogram(
   n = (size_t)snprint_histogram(s_buffer, n, &info, title, xlabel);
   clean_info(&info);
   return (int)n;
+}
+
+void dhist_set_num_buckets(
+    struct dhist *histogram, uint32_t target_buckets, int mp_flag) {
+  uint32_t old_num_buckets;
+  struct thread_info info;
+
+  thread_info_init_fields(histogram, &info, mp_flag);
+
+  old_num_buckets = histogram->num_buckets;
+  histogram->target_num_buckets = target_buckets;
+
+  if (old_num_buckets > target_buckets) {
+    if (mp_flag & DHIST_MULTI_THREADED)
+      pthread_mutex_lock(histogram->tree_mtx);
+
+    handle_bucket_deletes(histogram, mp_flag);
+
+    if (mp_flag & DHIST_MULTI_THREADED)
+      pthread_mutex_unlock(histogram->tree_mtx);
+  }
+
+  thread_info_finalize(histogram, &info, mp_flag);
+}
+
+uint32_t dhist_get_num_buckets(
+    struct dhist *histogram, bool get_actual_instead_of_target) {
+  if (get_actual_instead_of_target)
+    return histogram->num_buckets;
+  else
+    return histogram->target_num_buckets;
+}
+
+// This doesn't attempt to make the transition smooth.
+void dhist_set_decay_rate(struct dhist *histogram, double decay_rate) {
+  histogram->decay_rate = decay_rate;
+}
+
+double dhist_get_decay_rate(struct dhist *histogram) {
+  return histogram->decay_rate;
 }
 
 // Returns
@@ -1173,10 +1213,8 @@ rotate_double(struct dhist *histogram, struct bucket *root, int dir) {
 // Split the bucket. If we grew past target_num_buckets, find the least
 // populated bucket and schedule it for destruction.
 void
-handle_bucket_split_and_delete(
+handle_bucket_split_and_deletes(
     struct dhist *histogram, struct bucket *bucket, int mp_flag) {
-  struct bucket *cursor, *min_bucket;
-
   if (mp_flag & DHIST_MULTI_THREADED) {
     pthread_mutex_lock(histogram->tree_mtx);
 
@@ -1189,8 +1227,17 @@ handle_bucket_split_and_delete(
   }
 
   split_bucket(histogram, bucket, mp_flag);
+  handle_bucket_deletes(histogram, mp_flag);
 
-  if (histogram->num_buckets > histogram->target_num_buckets) {
+  if (mp_flag & DHIST_MULTI_THREADED)
+    pthread_mutex_unlock(histogram->tree_mtx);
+}
+
+// This should be called from inside a context that already holds the tree_mtx.
+void handle_bucket_deletes(struct dhist *histogram, int mp_flag) {
+  struct bucket *cursor, *min_bucket;
+
+  while (histogram->num_buckets > histogram->target_num_buckets) {
     cursor = histogram->root;
     while (cursor->children[0])
       cursor = cursor->children[0];
@@ -1205,12 +1252,8 @@ handle_bucket_split_and_delete(
       cursor = cursor->above;
     }
 
-    if (min_bucket)
-      delete_bucket(histogram, min_bucket, mp_flag);
+    delete_bucket(histogram, min_bucket, mp_flag);
   }
-
-  if (mp_flag & DHIST_MULTI_THREADED)
-    pthread_mutex_unlock(histogram->tree_mtx);
 }
 
 static void

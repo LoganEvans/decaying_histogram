@@ -188,14 +188,16 @@ TEST_F(HistogramTest, SetNumBuckets) {
   ASSERT_EQ(target_buckets_, dhist_get_num_buckets(histogram_, false));
 
   // Now lower the number of buckets.
-  dhist_set_num_buckets(histogram_, target_buckets_ - 5);
+  dhist_set_num_buckets(
+      histogram_, target_buckets_ - 5, DHIST_SINGLE_THREADED);
 
   // Buckets should immediately be deleted.
   ASSERT_EQ(target_buckets_ - 5, dhist_get_num_buckets(histogram_, true));
   ASSERT_EQ(target_buckets_ - 5, dhist_get_num_buckets(histogram_, false));
 
   // Raise the number of buckets.
-  dhist_set_num_buckets(histogram_, target_buckets_ + 5);
+  dhist_set_num_buckets(
+      histogram_, target_buckets_ + 5, DHIST_SINGLE_THREADED);
 
   // We haven't had a chance to split buckets yet, so the actual and target
   // number of buckets will have a mismatch.
@@ -211,8 +213,31 @@ TEST_F(HistogramTest, SetNumBuckets) {
   ASSERT_EQ(target_buckets_ + 5, dhist_get_num_buckets(histogram_, false));
 }
 
-static int
-count_buckets_in_tree(struct bucket *root) {
+TEST_F(HistogramTest, SetDecayRate) {
+  ASSERT_EQ(histogram_->decay_rate, dhist_get_decay_rate(histogram_));
+
+  for (int idx = 0; idx < 100000; idx++)
+    dhist_insert(histogram_, normal_(generator_), DHIST_SINGLE_THREADED);
+
+  dhist_set_decay_rate(histogram_, decay_rate_ / 2.0);
+  ASSERT_NEAR(dhist_get_decay_rate(histogram_), decay_rate_ / 2.0, 1e-10);
+
+  // Make sure we didn't break anything obvious.
+  for (int idx = 0; idx < 1000; idx++) {
+    dhist_insert(histogram_, normal_(generator_), DHIST_SINGLE_THREADED);
+    assert_consistent(histogram_);
+  }
+
+  dhist_set_decay_rate(histogram_, decay_rate_ * 2.0);
+  ASSERT_NEAR(dhist_get_decay_rate(histogram_), decay_rate_ * 2.0, 1e-10);
+
+  for (int idx = 0; idx < 1000; idx++) {
+    dhist_insert(histogram_, normal_(generator_), DHIST_SINGLE_THREADED);
+    assert_consistent(histogram_);
+  }
+}
+
+static int count_buckets_in_tree(struct bucket *root) {
   if (root) {
     return 1 +
         count_buckets_in_tree(root->children[0]) +
@@ -222,8 +247,7 @@ count_buckets_in_tree(struct bucket *root) {
   }
 }
 
-static void
-_print_tree(struct bucket *bucket, int depth) {
+static void _print_tree(struct bucket *bucket, int depth) {
   int i;
 
   printf("%.2lf", bucket->data->mu);
@@ -242,14 +266,12 @@ _print_tree(struct bucket *bucket, int depth) {
   }
 }
 
-static void
-print_tree(struct bucket *bucket) {
+static void print_tree(struct bucket *bucket) {
   _print_tree(bucket, 0);
   printf("\n");
 }
 
-static void
-assert_consistent(struct dhist *histogram) {
+static void assert_consistent(struct dhist *histogram) {
   uint32_t num_buckets_seen = 0;
   double upper_bound, lower_bound, count = 0.0;
   struct bucket *cursor = histogram->root, *cursor_two;
@@ -327,8 +349,7 @@ assert_consistent(struct dhist *histogram) {
   assert_invariant(histogram->root);
 }
 
-static int
-assert_invariant(struct bucket *root) {
+static int assert_invariant(struct bucket *root) {
   int left, right, dir;
 
   if (root == NULL) {
