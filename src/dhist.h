@@ -64,6 +64,11 @@ char * dhist_get_json(
 int dhist_snprint_histogram(
     char *s_buffer, size_t n, struct dhist *histogram, const char *title,
     const char *xlabel, int mp_flag);
+void dhist_set_num_buckets(struct dhist *histogram, uint32_t target_buckets);
+uint32_t dhist_get_num_buckets(
+        struct dhist *histogram, bool get_actual_instead_of_target);
+void dhist_set_decay_rate(struct dhist *histogram, double decay_rate);
+double dhist_get_decay_rate(struct dhist *histogram);
 
 double dhist_Jaccard_distance(
     struct dhist *hist1, struct dhist *hist2, int mp_flag);

@@ -36,7 +36,7 @@
 using std::cout;
 using std::endl;
 
-// TODO: Move the function prototypes in src/dhist.c into a header so that
+// TODO: Move the struct definitions in src/dhist.c into a header so that
 // these functions can be offloaded to a separate compilation unit.
 static void _print_tree(struct bucket *bucket, int depth);
 static void print_tree(struct bucket *bucket);
@@ -176,6 +176,39 @@ TEST_F(HistogramTest, Trace1) {
   } while (ch != EOF);
 
   fclose(fin);
+}
+
+TEST_F(HistogramTest, SetNumBuckets) {
+  // Burn in the histogram.
+  for (int idx = 0; idx < 100000; idx++)
+    dhist_insert(histogram_, normal_(generator_), DHIST_SINGLE_THREADED);
+
+  ASSERT_EQ(target_buckets_, histogram_->target_num_buckets);
+  ASSERT_EQ(target_buckets_, dhist_get_num_buckets(histogram_, true));
+  ASSERT_EQ(target_buckets_, dhist_get_num_buckets(histogram_, false));
+
+  // Now lower the number of buckets.
+  dhist_set_num_buckets(histogram_, target_buckets_ - 5);
+
+  // Buckets should immediately be deleted.
+  ASSERT_EQ(target_buckets_ - 5, dhist_get_num_buckets(histogram_, true));
+  ASSERT_EQ(target_buckets_ - 5, dhist_get_num_buckets(histogram_, false));
+
+  // Raise the number of buckets.
+  dhist_set_num_buckets(histogram_, target_buckets_ + 5);
+
+  // We haven't had a chance to split buckets yet, so the actual and target
+  // number of buckets will have a mismatch.
+  ASSERT_EQ(target_buckets_ - 5, dhist_get_num_buckets(histogram_, true));
+  ASSERT_EQ(target_buckets_ + 5, dhist_get_num_buckets(histogram_, false));
+
+  // Burn in the new number of buckets.
+  for (int idx = 0; idx < 100000; idx++)
+    dhist_insert(histogram_, normal_(generator_), DHIST_SINGLE_THREADED);
+
+  // Now the target and actual number of buckets should match.
+  ASSERT_EQ(target_buckets_ + 5, dhist_get_num_buckets(histogram_, true));
+  ASSERT_EQ(target_buckets_ + 5, dhist_get_num_buckets(histogram_, false));
 }
 
 static int
