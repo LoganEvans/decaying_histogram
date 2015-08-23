@@ -155,6 +155,8 @@ static void decay(
 static int snprint_histogram(
     char *s_buffer, size_t n, struct dhist_info *info, const char *title,
     const char *xlabel);
+static inline double roundoff_error_in_bounds(
+    double value, double lower, double higher);
 
 static void extract_info(
     struct dhist *histogram, int mp_flag, struct dhist_info *info);
@@ -925,7 +927,7 @@ static double
 compute_bound(
     struct dhist *histogram, struct bucket *left, struct bucket *right) {
   uint64_t generation;
-  double count_left, mu_left, count_right, mu_right;
+  double count_left, mu_left, count_right, mu_right, ret;
 
   // We can't increment generation until we finally make our update, but since
   // the boundaries don't move upon decay, we can use any generation value to
@@ -935,7 +937,9 @@ compute_bound(
     return right->data->mu - 0.5;
   } else if (!right) {
     return left->data->mu + 0.5;
-  } else if (left->data->update_generation > right->data->update_generation) {
+  }
+
+  if (left->data->update_generation > right->data->update_generation) {
     generation = left->data->update_generation;
     mu_left = left->data->mu;
     mu_right = right->data->mu;
@@ -949,9 +953,10 @@ compute_bound(
     count_right = right->data->count;
   }
 
-  return (
+  ret = (
       (mu_left * count_left + mu_right * count_right) /
       (count_left + count_right));
+  return roundoff_error_in_bounds(ret, mu_left, mu_right);
 }
 
 // Compute the count in a bucket.
@@ -968,7 +973,7 @@ static bool
 perform_add(
     struct dhist *histogram, struct bucket *bucket, double observation,
     bool recheck_left_boundary, bool recheck_right_boundary, int mp_flag) {
-  double boundary;
+  double boundary, mu, mu_lower_bound, mu_upper_bound;
   uint64_t update_generation;
 
   if (recheck_left_boundary) {
@@ -985,10 +990,13 @@ perform_add(
 
   bucket->data->count = 1.0 + compute_count(
       histogram, bucket, update_generation);
-  bucket->data->mu =
-      (bucket->data->count * bucket->data->mu + observation) /
-      (bucket->data->count + 1);
   bucket->data->update_generation = update_generation;
+
+  mu = (bucket->data->count * bucket->data->mu + observation) /
+       (bucket->data->count + 1);
+  mu_lower_bound = bucket->below ? bucket->below->data->mu : mu;
+  mu_upper_bound = bucket->above ? bucket->above->data->mu : mu;
+  mu = roundoff_error_in_bounds(mu, mu_lower_bound, mu_upper_bound);
 
   return true;
 }
@@ -1187,8 +1195,6 @@ handle_bucket_split_and_delete(
     while (cursor->children[0])
       cursor = cursor->children[0];
 
-    // XXX This process might interact badly with other threads... the repro of
-    // the issue is to spin up 30 threads and wait until deadlock (livelock?).
     min_bucket = NULL;
     while (cursor) {
       if (cursor->data->is_enabled &&
@@ -1240,9 +1246,17 @@ split_bucket(struct dhist *histogram, struct bucket *bucket, int mp_flag) {
       lower_bound = compute_bound(histogram, new_bucket->below, bucket);
     }
     diameter = upper_bound - lower_bound;
+    // XXX Why median? mu is guaranteed to be in the interval, so why not use
+    // it?
     median = lower_bound + diameter / 2.0;
     new_bucket->data->mu = median - diameter / 6.0;
     bucket->data->mu = median + diameter / 6.0;
+    //printf("... %.11lf %.11lf %.11lf\n", new_bucket->data->mu, median, bucket->data->mu);
+    //printf("??? %.11lf %.11lf\n", lower_bound, upper_bound);
+    //printf("!!! %.11lf %.11lf %d %.11lf %.11lf %d\n",
+    //    bucket->below->data->mu, bucket->below->data->count, bucket->below->data->update_generation,
+    //    bucket->data->mu, bucket->data->count, bucket->data->update_generation);
+    //printf("<<< %.11lf %.11lf\n", compute_bound(histogram, bucket->below->below, bucket->below), compute_bound(histogram, bucket->below, bucket));
   }
   release_write_lock(bucket, mp_flag);
 
@@ -1267,7 +1281,7 @@ delete_bucket(struct dhist *histogram, struct bucket *bucket, int mp_flag) {
   struct bucket *far_buckets[2];
   int dir_from_parent, dir, balance, idx;
   uint64_t generation;
-  double below_count, above_count;
+  double below_count, above_count, mu, mu_lower_bound, mu_upper_bound;
 
  restart:
   obtain_write_lock(bucket, mp_flag);
@@ -1314,17 +1328,23 @@ delete_bucket(struct dhist *histogram, struct bucket *bucket, int mp_flag) {
   // Update the lucky bucket data.
   decay(histogram, bucket, generation);
   decay(histogram, lucky_bucket, generation);
-  lucky_bucket->data->mu =
-      (lucky_bucket->data->mu * lucky_bucket->data->count +
-       bucket->data->mu * bucket->data->count) /
-      (lucky_bucket->data->count + bucket->data->count);
-  lucky_bucket->data->count += bucket->data->count;
 
   // Remove bucket from the linked list.
   if (bucket->below)
     bucket->below->above = bucket->above;
   if (bucket->above)
     bucket->above->below = bucket->below;
+
+  // Update the lucky_bucket's stats.
+  mu = (lucky_bucket->data->mu * lucky_bucket->data->count +
+        bucket->data->mu * bucket->data->count) /
+       (lucky_bucket->data->count + bucket->data->count);
+  mu_lower_bound = lucky_bucket->below ? lucky_bucket->below->data->mu : mu;
+  mu_upper_bound = lucky_bucket->above ? lucky_bucket->above->data->mu : mu;
+  lucky_bucket->data->mu =
+      roundoff_error_in_bounds(mu, mu_lower_bound, mu_upper_bound);
+
+  lucky_bucket->data->count += bucket->data->count;
 
   // We no longer need the outside boundaries.
   if (mp_flag & DHIST_MULTI_THREADED) {
@@ -1547,6 +1567,20 @@ snprint_histogram(
 #undef dhist_snprint_helper
 
   return num_chars;
+}
+
+// Some operations can produce roundoff error the makes a value shift outside
+// of sensible bounds. For example, the mu for a bucket could be smaller than
+// its left neighbor due to roundoff error. If this phenomenon exists, replace
+// the value with the acceptible boundary value.
+double roundoff_error_in_bounds(double value, double lower, double upper) {
+  if (lower <= value && value <= upper) {
+    return value;
+  } else if (value < lower) {
+    return lower;
+  } else {
+    return upper;
+  }
 }
 
 // Identify the boundaries that are observed by one or both of the histograms.

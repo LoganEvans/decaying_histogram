@@ -18,10 +18,15 @@ def parse_options():
     parser.add_argument(
             '--alpha', type=float, default=1.0,
             help="alpha transparency value for front histogram")
+    parser.add_argument(
+            '--yaxis', type=str, default="max",
+            help="Set the yaxis to scale to the max observed value "
+                 "(--yaxis=max), the log of the max observed value "
+                 "(--yaxis=log), or a max of a specific value "
+                 "(--yaxis=<FLOAT>)")
 
     return parser.parse_args()
 
-MAXY = None
 
 def update(num, cli_args):
     global _color_order
@@ -48,10 +53,17 @@ def update(num, cli_args):
         ymax = None
         for memo in update.memos.values():
             for idx, data in enumerate(reversed(memo["history"])):
-                if MAXY:
-                    weights = np.array([min(MAXY, weight) for weight in data['weights']])
-                else:
+                if cli_args.yaxis == "max":
                     weights = np.array(data['weights'])
+                elif cli_args.yaxis == "log":
+                    weights = np.array(
+                            [np.log10(weight + 1.0) for weight in data['weights']])
+                else:
+                    max_val = float(cli_args.yaxis)
+                    weights = np.array(
+                            [min(max_val, weight)
+                            for weight in data['weights']])
+
                 boundaries = np.array(data['boundaries'])
                 try:
                     widths = boundaries[1:] - boundaries[:-1]
@@ -61,7 +73,8 @@ def update(num, cli_args):
                     pyplot.fill_between(
                             boundaries.repeat(2)[1:-1], weights.repeat(2),
                             facecolor=memo["color"],
-                            alpha=cli_args.alpha * ((idx + 1.0) / len(memo["history"])))
+                            alpha=(cli_args.alpha *
+                                   ((idx + 1.0) / len(memo["history"]))))
                 except:
                     pass
         pyplot.ylim(0, ymax)

@@ -33,8 +33,8 @@
 #include <random>
 
 #define NUM_BUCKETS 50
-#define NUM_THREADS 30
-#define DECAY_RATE 0.9
+#define NUM_THREADS 4
+#define DECAY_RATE 0.99999
 
 // 2.397 * 1024 * 1024 * 1024 is roughly the number of cycles in a second.
 #define CYCLES ((uint64_t)(2 * 2.397 * 1024 * 1024 * 1024))
@@ -42,7 +42,7 @@
     (NUM_THREADS > 1 ? DHIST_MULTI_THREADED : DHIST_SINGLE_THREADED)
 #define FRAMES_PER_SECOND 5.01
 
-#define ANIMATE 2
+#define ANIMATE 1
 #define NORMAL_DISTRIBUTION 0
 
 static struct dhist *g_histogram;
