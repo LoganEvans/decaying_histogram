@@ -32,7 +32,7 @@
 #include "dhist.h"
 #include <random>
 
-#define NUM_BUCKETS 50
+#define NUM_BUCKETS 40
 #define NUM_THREADS 4
 #define DECAY_RATE 0.99999
 

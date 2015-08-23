@@ -996,7 +996,7 @@ perform_add(
        (bucket->data->count + 1);
   mu_lower_bound = bucket->below ? bucket->below->data->mu : mu;
   mu_upper_bound = bucket->above ? bucket->above->data->mu : mu;
-  mu = roundoff_error_in_bounds(mu, mu_lower_bound, mu_upper_bound);
+  bucket->data->mu = roundoff_error_in_bounds(mu, mu_lower_bound, mu_upper_bound);
 
   return true;
 }
@@ -1239,12 +1239,18 @@ split_bucket(struct dhist *histogram, struct bucket *bucket, int mp_flag) {
     // a bucket again until this happens.
     new_bucket->data->mu = bucket->data->mu;
   } else {
-    upper_bound = compute_bound(histogram, bucket, bucket->above);
     if (!new_bucket->below) {
+      upper_bound = compute_bound(histogram, bucket, bucket->above);
+      // If no lower bound, construct one such that mu is in the exact center.
       lower_bound = bucket->data->mu - (upper_bound - bucket->data->mu);
+    } else if (!bucket->above) {
+      lower_bound = compute_bound(histogram, new_bucket->below, bucket);
+      upper_bound = bucket->data->mu + (bucket->data->mu - lower_bound);
     } else {
       lower_bound = compute_bound(histogram, new_bucket->below, bucket);
+      upper_bound = compute_bound(histogram, bucket, bucket->above);
     }
+
     new_bucket->data->mu = (lower_bound + bucket->data->mu) / 2.0;
     bucket->data->mu = (bucket->data->mu + upper_bound) / 2.0;
   }
