@@ -204,9 +204,10 @@ TEST_F(HistogramTest, SetNumBuckets) {
   ASSERT_EQ(target_buckets_ - 5, dhist_get_num_buckets(histogram_, true));
   ASSERT_EQ(target_buckets_ + 5, dhist_get_num_buckets(histogram_, false));
 
-  // Burn in the new number of buckets.
-  for (int idx = 0; idx < 100000; idx++)
-    dhist_insert(histogram_, normal_(generator_), DHIST_SINGLE_THREADED);
+  // Burn in the new number of buckets. Shift the distribution so that we
+  // actually need to split buckets.
+  for (int idx = 0; idx < 10000; idx++)
+    dhist_insert(histogram_, 9.0 + normal_(generator_), DHIST_SINGLE_THREADED);
 
   // Now the target and actual number of buckets should match.
   ASSERT_EQ(target_buckets_ + 5, dhist_get_num_buckets(histogram_, true));
@@ -214,22 +215,26 @@ TEST_F(HistogramTest, SetNumBuckets) {
 }
 
 TEST_F(HistogramTest, SetDecayRate) {
+  double uut_decay_rate;
   ASSERT_EQ(histogram_->decay_rate, dhist_get_decay_rate(histogram_));
 
   for (int idx = 0; idx < 100000; idx++)
     dhist_insert(histogram_, normal_(generator_), DHIST_SINGLE_THREADED);
 
-  dhist_set_decay_rate(histogram_, decay_rate_ / 2.0);
-  ASSERT_NEAR(dhist_get_decay_rate(histogram_), decay_rate_ / 2.0, 1e-10);
+  uut_decay_rate = decay_rate_ / 2.0;
+  dhist_set_decay_rate(histogram_, uut_decay_rate);
+  ASSERT_NEAR(dhist_get_decay_rate(histogram_), uut_decay_rate, 1e-10);
 
   // Make sure we didn't break anything obvious.
+  assert_consistent(histogram_);
   for (int idx = 0; idx < 1000; idx++) {
     dhist_insert(histogram_, normal_(generator_), DHIST_SINGLE_THREADED);
     assert_consistent(histogram_);
   }
 
-  dhist_set_decay_rate(histogram_, decay_rate_ * 2.0);
-  ASSERT_NEAR(dhist_get_decay_rate(histogram_), decay_rate_ * 2.0, 1e-10);
+  uut_decay_rate = (1.0 + decay_rate_) / 2.0;
+  dhist_set_decay_rate(histogram_, uut_decay_rate);
+  ASSERT_NEAR(dhist_get_decay_rate(histogram_), uut_decay_rate, 1e-10);
 
   for (int idx = 0; idx < 1000; idx++) {
     dhist_insert(histogram_, normal_(generator_), DHIST_SINGLE_THREADED);
@@ -335,7 +340,7 @@ static void assert_consistent(struct dhist *histogram) {
     cursor = cursor->above;
   }
 
-  if (ABS(count - histogram->total_count) >= 1e-10) {
+  if (ABS(count - histogram->total_count) >= 1e-9) {
     printf(
         "ERROR: Sum of bucket->data->count (%.11lf) does not equal "
         "total_count (%.11lf). Difference: %.11lf\n",

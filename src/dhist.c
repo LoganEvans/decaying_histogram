@@ -43,7 +43,7 @@
 #define MAX(x, y) ((x) > (y) ? (x) : (y))
 #endif
 
-#define PRECOMPUTED_POWERS_FACTOR 4
+#define NUM_PRECOMPUTED_POWERS 200
 
 
 // Interestingly, splitting bucket_data out from bucket provides a 4% speedup.
@@ -199,11 +199,10 @@ dhist_init(uint32_t target_buckets, double decay_rate) {
   histogram->num_buckets = 1;
   histogram->generation = 0;
   // The pow_table is a cache of the commonly used compound decay factors.
+  histogram->num_precomputed_powers = NUM_PRECOMPUTED_POWERS;
   histogram->pow_table = (double *)malloc(
-      PRECOMPUTED_POWERS_FACTOR * histogram->target_num_buckets *
-      sizeof(double));
-  for (idx = 0;
-       idx < PRECOMPUTED_POWERS_FACTOR * histogram->target_num_buckets; idx++)
+      histogram->num_precomputed_powers * sizeof(double));
+  for (idx = 0; idx < histogram->num_precomputed_powers; idx++)
     histogram->pow_table[idx] = ipow(decay_rate, idx);
 
   histogram->thread_info_head = NULL;
@@ -376,8 +375,40 @@ uint32_t dhist_get_num_buckets(
     return histogram->target_num_buckets;
 }
 
-// This doesn't attempt to make the transition smooth.
+// This is only safe if called from a single-threaded context.
 void dhist_set_decay_rate(struct dhist *histogram, double decay_rate) {
+  struct bucket *cursor;
+  uint64_t generation, idx;
+  double count, old_total_count, new_total_count, fudge_factor;
+
+  // Can't do it.
+  if (decay_rate <= 0.0 || 1.0 <= decay_rate)
+    return;
+
+  generation = get_next_generation(histogram, false, DHIST_SINGLE_THREADED);
+  old_total_count = histogram->total_count;
+  new_total_count =
+      1.0 + decay_rate * (1.0 - ipow(decay_rate, generation - 1)) /
+      (1.0 - decay_rate);
+  // fudge_factor: The ratio of the right answer to the wrong answer.
+  fudge_factor = new_total_count / old_total_count;
+
+  for (idx = 0; idx < histogram->num_precomputed_powers; idx++)
+    histogram->pow_table[idx] = ipow(decay_rate, idx);
+
+  cursor = histogram->root;
+  while (cursor->children[0])
+    cursor = cursor->children[0];
+
+  count = 0.0;
+  while (cursor) {
+    decay(histogram, cursor, generation);
+    cursor->data->count *= fudge_factor;
+    count += cursor->data->count;
+    cursor = cursor->above;
+  }
+
+  histogram->total_count = count;
   histogram->decay_rate = decay_rate;
 }
 
@@ -909,8 +940,7 @@ fix_height(struct bucket *bucket) {
   }
 }
 
-static void
-set_child(struct bucket *root, struct bucket *child, int dir) {
+static void set_child(struct bucket *root, struct bucket *child, int dir) {
   root->children[dir] = child;
   if (child != NULL)
     child->parent = root;
@@ -919,16 +949,14 @@ set_child(struct bucket *root, struct bucket *child, int dir) {
 
 // Calculate the decay factor that should be applied to a count that hasn't
 // bene updated in missed_generations updates.
-static double
-get_decay(struct dhist *histogram, uint64_t missed_generations) {
-  if (missed_generations <
-      PRECOMPUTED_POWERS_FACTOR * (uint32_t)histogram->target_num_buckets)
+static double get_decay(struct dhist *histogram, uint64_t missed_generations) {
+  if (missed_generations < histogram->num_precomputed_powers)
     return histogram->pow_table[missed_generations];
   else
     return ipow(histogram->decay_rate, missed_generations);
 }
 
-double split_threshold(struct dhist *histogram) {
+static double split_threshold(struct dhist *histogram) {
   //return
   //    2 * (1.0 / (1.0 - histogram->decay_rate)) /
   //    histogram->target_num_buckets;
@@ -936,8 +964,7 @@ double split_threshold(struct dhist *histogram) {
 }
 
 // Get the next generation count and increment the global counter.
-static uint64_t
-get_next_generation(
+static uint64_t get_next_generation(
     struct dhist *histogram, bool increment, int mp_flag) {
   uint64_t generation;
 
@@ -1027,7 +1054,6 @@ perform_add(
   }
 
   update_generation = get_next_generation(histogram, true, mp_flag);
-
   bucket->data->count = 1.0 + compute_count(
       histogram, bucket, update_generation);
   bucket->data->update_generation = update_generation;
@@ -1036,7 +1062,8 @@ perform_add(
        (bucket->data->count + 1);
   mu_lower_bound = bucket->below ? bucket->below->data->mu : mu;
   mu_upper_bound = bucket->above ? bucket->above->data->mu : mu;
-  bucket->data->mu = roundoff_error_in_bounds(mu, mu_lower_bound, mu_upper_bound);
+  bucket->data->mu =
+      roundoff_error_in_bounds(mu, mu_lower_bound, mu_upper_bound);
 
   return true;
 }

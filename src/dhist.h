@@ -53,6 +53,7 @@ struct dhist {
   pthread_mutex_t *thread_info_mtx;
   struct bucket *fix_balance_stack;
   struct thread_info *thread_info_head;
+  uint32_t num_precomputed_powers;
 };
 
 struct dhist * dhist_init(uint32_t target_buckets, double decay_rate);
@@ -67,7 +68,8 @@ int dhist_snprint_histogram(
 void dhist_set_num_buckets(
     struct dhist *histogram, uint32_t target_buckets, int mp_flag);
 uint32_t dhist_get_num_buckets(
-        struct dhist *histogram, bool get_actual_instead_of_target);
+    struct dhist *histogram, bool get_actual_instead_of_target);
+// This is only safe when called from a single-threaded context.
 void dhist_set_decay_rate(struct dhist *histogram, double decay_rate);
 double dhist_get_decay_rate(struct dhist *histogram);
 
