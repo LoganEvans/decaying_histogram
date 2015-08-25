@@ -30,5 +30,5 @@ To build the tests, run:
 $ ./autogen.sh
 $ ./configure
 $ make check
-$ tests/decaying_histogram_test
+$ tests/test_dhist
 
