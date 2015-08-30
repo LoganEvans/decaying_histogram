@@ -54,6 +54,7 @@ struct dhist {
   struct bucket *fix_balance_stack;
   struct thread_info *thread_info_head;
   uint32_t num_precomputed_powers;
+  uint8_t __padding[4];
 };
 
 struct dhist * dhist_init(uint32_t target_buckets, double decay_rate);

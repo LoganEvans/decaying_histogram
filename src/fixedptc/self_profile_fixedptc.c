@@ -29,6 +29,7 @@
 #include <math.h>
 #include <stdio.h>
 #include <pthread.h>
+#include <stdlib.h>
 #include "dhist_fixedptc.h"
 
 #define NUM_BUCKETS 40
@@ -42,14 +43,8 @@
 #define FRAMES_PER_SECOND 5.01
 
 #define ANIMATE 1
-#define NORMAL_DISTRIBUTION 0
 
 static struct dhist *g_histogram;
-
-#if NORMAL_DISTRIBUTION
-std::default_random_engine g_generator;
-std::normal_distribution<double> g_distribution(0.0, 1.0);
-#endif
 
 static uint64_t rdtsc() {
   uint32_t hi, lo;
@@ -74,13 +69,8 @@ thread_func(void *args) {
   while (last_timestamp < stop_timestamp) {
 #endif
     this_timestamp = rdtsc();
-#if NORMAL_DISTRIBUTION
-    dhist_insert(
-        g_histogram, g_distribution(g_generator), DHIST_MP_FLAG);
-#else
     dhist_insert(
         g_histogram, log2(this_timestamp - last_timestamp), DHIST_MP_FLAG);
-#endif
     last_timestamp = this_timestamp;
   }
 
@@ -132,8 +122,8 @@ int main() {
   for (int i = 0; i < NUM_THREADS; i++)
     pthread_join(threads[i], NULL);
 
-  histogram_json = dhist_get_json(
-      g_histogram, "Test", "log_2(insertion time)", DHIST_MP_FLAG);
+  //histogram_json = dhist_get_json(
+  //    g_histogram, "Test", "log_2(insertion time)", DHIST_MP_FLAG);
   puts(histogram_json);
   free(histogram_json);
   dhist_destroy(g_histogram);
