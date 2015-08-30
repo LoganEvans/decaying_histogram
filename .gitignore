@@ -105,6 +105,7 @@ Makefile.in
 src/main
 src/distance_comparison
 src/profile_malloc
+src/fixedptc/dhist_fixedptc
 tests/test_dhist
 tests/test_dhist.trs
 
