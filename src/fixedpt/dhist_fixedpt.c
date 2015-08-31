@@ -48,8 +48,8 @@ struct bucket_data {
   // pointers are protected by bucket->boundary_mtx and
   // bucket->above->boundary_mtx. If this thread holds either of those
   // mutexes, these values cannot be modified by any other thread.
-  double count;
-  double mu;
+  fixedpt count;
+  fixedpt mu;
   uint64_t update_generation;
   int height;
   // The is_enabled field exists because the bucket lookup is not protected
@@ -77,10 +77,10 @@ struct bucket {
 struct dhist_info {
   struct dhist *histogram;
   union {
-    double *weights;
-    double *CDF;
+    fixedpt *weights;
+    fixedpt *CDF;
   };
-  double *boundaries;
+  fixedpt *boundaries;
   uint64_t generation;
   int num_buckets;
   int num_boundaries;
@@ -92,7 +92,7 @@ struct thread_info {
   struct bucket *bucket_to_free;
 };
 
-static double ipow(double coefficient, uint64_t power);
+static fixedpt ipow(fixedpt coefficient, uint64_t power);
 
 static struct bucket * bucket_init(int mp_flag);
 static void bucket_destroy(struct bucket *bucket);
@@ -104,7 +104,7 @@ static void thread_info_finalize(
 static void schedule_bucket_destruction(
     struct dhist *histogram, struct bucket *bucket, int mp_flag);
 
-static bool is_target_boundary(struct bucket *bucket, double observation);
+static bool is_target_boundary(struct bucket *bucket, fixedpt observation);
 static int compute_balance(struct bucket *bucket);
 static void obtain_write_lock(struct bucket *bucket, int mp_flag);
 static void release_write_lock(struct bucket *bucket, int mp_flag);
@@ -114,27 +114,27 @@ static void unlock_boundary(struct bucket *bucket, int mp_flag);
 static void fix_height(struct bucket *bucket);
 static void set_child(struct bucket *root, struct bucket *child, int dir);
 
-static double split_threshold(struct dhist *histogram);
-static double get_decay(struct dhist *histogram, uint64_t missed_generations);
+static fixedpt split_threshold(struct dhist *histogram);
+static fixedpt get_decay(struct dhist *histogram, uint64_t missed_generations);
 static uint64_t get_next_generation(
     struct dhist *histogram, bool increment, int mp_flag);
-static double compute_bound(
+static fixedpt compute_bound(
     struct dhist *histogram, struct bucket *left, struct bucket *right);
-static double compute_count(
+static fixedpt compute_count(
     struct dhist *histogram, struct bucket *bucket, uint64_t generation);
 static bool perform_add(
     struct dhist *histogram, struct bucket *bucket,
-    double observation, bool recheck_left_boundary,
+    fixedpt observation, bool recheck_left_boundary,
     bool recheck_right_boundary, int mp_flag);
 static struct bucket * find_and_lock_bucket(
-    struct dhist *histogram, double observation, int mp_flag);
+    struct dhist *histogram, fixedpt observation, int mp_flag);
 static void fix_balance_enstack(
     struct dhist *histogram, struct bucket *bucket);
 static void fix_balance_process_item(struct dhist *histogram);
 static void fix_balance(struct dhist *histogram, struct bucket *bucket);
 static struct bucket * rotate_single(
     struct dhist *histogram, struct bucket *root, int dir);
-static struct bucket * rotate_double(
+static struct bucket * rotate_fixedpt(
     struct dhist *histogram, struct bucket *root, int dir);
 static void handle_bucket_split_and_deletes(
     struct dhist *histogram, struct bucket *bucket, int mp_flag);
@@ -148,8 +148,8 @@ static void decay(
 static int snprint_histogram(
     char *s_buffer, size_t n, struct dhist_info *info, const char *title,
     const char *xlabel);
-static inline double roundoff_error_in_bounds(
-    double value, double lower, double higher);
+static inline fixedpt roundoff_error_in_bounds(
+    fixedpt value, fixedpt lower, fixedpt higher);
 
 static void extract_info(
     struct dhist *histogram, int mp_flag, struct dhist_info *info);
@@ -161,7 +161,7 @@ const int DHIST_MULTI_THREADED = 1 << 1;
 
 
 struct dhist *
-dhist_init(uint32_t target_buckets, double decay_rate) {
+dhist_init(uint32_t target_buckets, fixedpt decay_rate) {
   struct dhist *histogram;
   uint64_t idx;
 
@@ -181,8 +181,8 @@ dhist_init(uint32_t target_buckets, double decay_rate) {
   histogram->generation = 0;
   // The pow_table is a cache of the commonly used compound decay factors.
   histogram->num_precomputed_powers = NUM_PRECOMPUTED_POWERS;
-  histogram->pow_table = (double *)malloc(
-      histogram->num_precomputed_powers * sizeof(double));
+  histogram->pow_table = (fixedpt *)malloc(
+      histogram->num_precomputed_powers * sizeof(fixedpt));
   for (idx = 0; idx < histogram->num_precomputed_powers; idx++)
     histogram->pow_table[idx] = ipow(decay_rate, idx);
 
@@ -232,11 +232,14 @@ void dhist_destroy(struct dhist *histogram) {
 }
 
 void dhist_insert(
-    struct dhist *histogram, double observation, int mp_flag) {
+    struct dhist *histogram, uint64_t observation, int mp_flag) {
+  fixedpt obs;
   struct bucket *bucket;
   bool add_succeeded;
-  double boundary;
+  fixedpt boundary;
   struct thread_info info;
+
+  obs = 
 
   thread_info_init_fields(histogram, &info, mp_flag);
 
@@ -340,10 +343,10 @@ uint32_t dhist_get_num_buckets(
 }
 
 // This is only safe if called from a single-threaded context.
-void dhist_set_decay_rate(struct dhist *histogram, double decay_rate) {
+void dhist_set_decay_rate(struct dhist *histogram, fixedpt decay_rate) {
   struct bucket *cursor;
   uint64_t generation, idx;
-  double count, old_total_count, new_total_count, fudge_factor;
+  fixedpt count, old_total_count, new_total_count, fudge_factor;
 
   // Can't do it.
   if (decay_rate <= 0.0 || 1.0 <= decay_rate)
@@ -376,13 +379,13 @@ void dhist_set_decay_rate(struct dhist *histogram, double decay_rate) {
   histogram->decay_rate = decay_rate;
 }
 
-double dhist_get_decay_rate(struct dhist *histogram) {
+fixedpt dhist_get_decay_rate(struct dhist *histogram) {
   return histogram->decay_rate;
 }
 
-static double
-ipow(double coefficient, uint64_t power) {
-  double result;
+static fixedpt
+ipow(fixedpt coefficient, uint64_t power) {
+  fixedpt result;
 
   result = 1.0;
   while (power) {
@@ -553,8 +556,8 @@ static void schedule_bucket_destruction(
  * obs \in [bucket->below->data->mu, bucket->data->mu)
  */
 static bool
-is_target_boundary(struct bucket *bucket, double observation) {
-  double left_mu, mu;
+is_target_boundary(struct bucket *bucket, fixedpt observation) {
+  fixedpt left_mu, mu;
   struct bucket *below;
 
   if ((below = bucket->below) != NULL) {
@@ -695,14 +698,14 @@ static void set_child(struct bucket *root, struct bucket *child, int dir) {
 
 // Calculate the decay factor that should be applied to a count that hasn't
 // bene updated in missed_generations updates.
-static double get_decay(struct dhist *histogram, uint64_t missed_generations) {
+static fixedpt get_decay(struct dhist *histogram, uint64_t missed_generations) {
   if (missed_generations < histogram->num_precomputed_powers)
     return histogram->pow_table[missed_generations];
   else
     return ipow(histogram->decay_rate, missed_generations);
 }
 
-static double split_threshold(struct dhist *histogram) {
+static fixedpt split_threshold(struct dhist *histogram) {
   //return
   //    2 * (1.0 / (1.0 - histogram->decay_rate)) /
   //    histogram->target_num_buckets;
@@ -736,11 +739,11 @@ static uint64_t get_next_generation(
 }
 
 // Compute the boundary between two buckets.
-static double
+static fixedpt
 compute_bound(
     struct dhist *histogram, struct bucket *left, struct bucket *right) {
   uint64_t generation;
-  double count_left, mu_left, count_right, mu_right, ret;
+  fixedpt count_left, mu_left, count_right, mu_right, ret;
 
   // We can't increment generation until we finally make our update, but since
   // the boundaries don't move upon decay, we can use any generation value to
@@ -773,7 +776,7 @@ compute_bound(
 }
 
 // Compute the count in a bucket.
-static double compute_count(
+static fixedpt compute_count(
     struct dhist *histogram, struct bucket *bucket, uint64_t generation) {
   return (
       bucket->data->count *
@@ -784,9 +787,9 @@ static double compute_count(
 // the recheck_* flags is true and the boundary is not correct.
 static bool
 perform_add(
-    struct dhist *histogram, struct bucket *bucket, double observation,
+    struct dhist *histogram, struct bucket *bucket, fixedpt observation,
     bool recheck_left_boundary, bool recheck_right_boundary, int mp_flag) {
-  double boundary, mu, mu_lower_bound, mu_upper_bound;
+  fixedpt boundary, mu, mu_lower_bound, mu_upper_bound;
   uint64_t update_generation;
 
   if (recheck_left_boundary) {
@@ -823,7 +826,7 @@ perform_add(
  * right hand neighbor will be locked.
  */
 static struct bucket * find_and_lock_bucket(
-    struct dhist *histogram, double observation, int mp_flag) {
+    struct dhist *histogram, fixedpt observation, int mp_flag) {
   struct bucket *bucket, *other;
 
   do {
@@ -892,12 +895,12 @@ fix_balance_process_item(struct dhist *histogram) {
     dir = (balance < 0);
 
     if (bucket->children[!dir]->children[!dir] == NULL) {
-      bucket = rotate_double(histogram, bucket, dir);
+      bucket = rotate_fixedpt(histogram, bucket, dir);
     } else if (bucket->children[!dir]->children[dir] == NULL) {
       bucket = rotate_single(histogram, bucket, dir);
     } else if (bucket->children[!dir]->children[dir]->data->height >
         bucket->children[!dir]->children[!dir]->data->height) {
-      bucket = rotate_double(histogram, bucket, dir);
+      bucket = rotate_fixedpt(histogram, bucket, dir);
     } else {
       bucket = rotate_single(histogram, bucket, dir);
     }
@@ -954,7 +957,7 @@ rotate_single(struct dhist *histogram, struct bucket *root, int dir) {
 }
 
 static struct bucket *
-rotate_double(struct dhist *histogram, struct bucket *root, int dir) {
+rotate_fixedpt(struct dhist *histogram, struct bucket *root, int dir) {
   struct bucket *new_root;
   int dir_from_parent;
 
@@ -1031,7 +1034,7 @@ void handle_bucket_deletes(struct dhist *histogram, int mp_flag) {
 
 static void
 split_bucket(struct dhist *histogram, struct bucket *bucket, int mp_flag) {
-  double lower_bound, upper_bound;
+  fixedpt lower_bound, upper_bound;
   struct bucket *new_bucket, *memo;
 
   obtain_write_lock(bucket, mp_flag);
@@ -1093,7 +1096,7 @@ delete_bucket(struct dhist *histogram, struct bucket *bucket, int mp_flag) {
   struct bucket *far_buckets[2];
   int dir_from_parent, dir, balance, idx;
   uint64_t generation;
-  double below_count, above_count, mu, mu_lower_bound, mu_upper_bound;
+  fixedpt below_count, above_count, mu, mu_lower_bound, mu_upper_bound;
 
  restart:
   obtain_write_lock(bucket, mp_flag);
@@ -1239,7 +1242,7 @@ decay(struct dhist *histogram, struct bucket *bucket, uint64_t generation) {
 static void extract_info(
     struct dhist *histogram, int mp_flag, struct dhist_info *info) {
   struct bucket *bucket;
-  double total_count;
+  fixedpt total_count;
   int idx;
 
   info->histogram = histogram;
@@ -1250,8 +1253,8 @@ static void extract_info(
   // Allocate enough space for both the weights and the boundaries. We can
   // have one more than the target number of buckets for a short period of
   // time, but we can't grow past that.
-  info->weights = (double *)malloc(
-      sizeof(double) * 2 * (histogram->target_num_buckets + 1) + 1);
+  info->weights = (fixedpt *)malloc(
+      sizeof(fixedpt) * 2 * (histogram->target_num_buckets + 1) + 1);
   info->boundaries = info->weights + histogram->target_num_buckets + 1;
 
   info->generation = get_next_generation(histogram, false, mp_flag);
@@ -1385,7 +1388,7 @@ snprint_histogram(
 // of sensible bounds. For example, the mu for a bucket could be smaller than
 // its left neighbor due to roundoff error. If this phenomenon exists, replace
 // the value with the acceptible boundary value.
-double roundoff_error_in_bounds(double value, double lower, double upper) {
+fixedpt roundoff_error_in_bounds(fixedpt value, fixedpt lower, fixedpt upper) {
   if (lower <= value && value <= upper) {
     return value;
   } else if (value < lower) {

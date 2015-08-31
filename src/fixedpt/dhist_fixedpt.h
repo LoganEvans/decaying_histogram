@@ -37,6 +37,11 @@ extern "C" {
 #include <stdbool.h>
 #include <pthread.h>
 
+#define FIXEDPT_BITS 64
+// ln(uint64_max) ~= 44, which needs 6 bits. The sign needs another bit.
+#define FIXEDPT_WBITS 7
+#include "fixedptc.h"
+
 extern const int DHIST_SINGLE_THREADED;
 extern const int DHIST_MULTI_THREADED;
 
