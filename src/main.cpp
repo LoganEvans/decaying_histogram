@@ -33,7 +33,7 @@
 #include <random>
 
 #define NUM_BUCKETS 40
-#define NUM_THREADS 4
+#define NUM_THREADS 1
 #define DECAY_RATE 0.99999
 
 // 2.397 * 1024 * 1024 * 1024 is roughly the number of cycles in a second.

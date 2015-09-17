@@ -387,12 +387,53 @@ fixedpt_ln(fixedpt x)
       - fixedpt_mul(s, f - R));
 }
 
+static inline fixedpt
+fixedpt_arithmetic_geometric_mean(fixedpt a, fixedpt g)
+{
+  int idx;
+  fixedpt a_new, g_new;
+
+  // 7 should be defined as the log2(FBITS) + 1.
+  for (idx = 0; idx < 7; idx++) {
+    a_new = fixedpt_div(a + g, 2);
+    g_new = fixedpt_sqrt(fixedpt_mult(a, g));
+    a = a_new;
+    g = g_new;
+  }
+
+  return a;
+}
+
+static inline fixedpt
+fixedpt_ln_from_uint64_t(uint64_t x)
+{
+  fixedpt two_to_the_m;
+
+  two_to_the_m = 
+}
+
 
 /* Returns the logarithm of the given base of the given fixedpt number */
 static inline fixedpt
 fixedpt_log(fixedpt x, fixedpt base)
 {
   return (fixedpt_div(fixedpt_ln(x), fixedpt_ln(base)));
+}
+
+static fixedpt
+fixedpt_ipow(fixedpt coefficient, uint64_t power) {
+  fixedpt result;
+
+  result = 1.0;
+  while (power) {
+    if (power & 1) {
+      result = fixedpt_mult(result, coefficient);
+    }
+    power >>= 1;
+    coefficient = fixedpt_mult(coefficient, coefficient);
+  }
+
+  return result;
 }
 
 
@@ -406,5 +447,7 @@ fixedpt_pow(fixedpt n, fixedpt exp)
     return 0;
   return (fixedpt_exp(fixedpt_mul(fixedpt_ln(n), exp)));
 }
+
+
 
 #endif

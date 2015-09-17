@@ -242,6 +242,25 @@ TEST_F(HistogramTest, SetDecayRate) {
   }
 }
 
+TEST_F(HistogramTest, RoundoffErrorInBounds) {
+  double count_left, mu_left, count_right, mu_right, mu;
+
+  count_left = 1.9415677466378186e-09;
+  mu_left = 1279999.4617896655;
+  count_right = 9.9539473717148734;
+  mu_right = 1279999.9999999998;
+
+  mu = ((count_left * mu_left) + (count_right * mu_right)) /
+       (count_left + count_right);
+
+  // Make sure that this DOES actually go the wrong way... the mean is larger
+  // than either value.
+  ASSERT_LT(mu_right, mu);
+  ASSERT_EQ(
+      mu_right,
+      roundoff_error_in_bounds(mu, mu_left, mu_right));
+}
+
 static int count_buckets_in_tree(struct bucket *root) {
   if (root) {
     return 1 +
